@@ -10,7 +10,8 @@ const port = process.env.PORT
 
 const ServicoRoute = require('./routes/ServicoRoute.js')
 const StatusRoute = require('./routes/StatusRoute.js')
-const ContratoController = require('./routes/ContratoRoute.js')
+const ContratoRoute = require('./routes/ContratoRoute.js')
+const ContratoServicoRoute = require('./routes/ContratoServicoRoute.js')
 
 /*  */
 
@@ -29,5 +30,6 @@ app.use(express.json())
 app.use(
     ServicoRoute,
     StatusRoute,
-    ContratoController
+    ContratoRoute,
+    ContratoServicoRoute
 )
