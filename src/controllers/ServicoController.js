@@ -59,7 +59,7 @@ async function inserirServico(req,res){
 
     }catch(error){
         res.status(500).json({
-            message:'Erro ao ler ID do serviço, confira o console'
+            message:'Erro ao criar serviço, confira o console'
         })
         console.log(error)
     }
@@ -81,7 +81,7 @@ async function excluirServico(req,res){
 
     }catch(error){
         res.status(500).json({
-            message:'Erro ao excluir do serviço, confira o console'
+            message:'Erro ao excluir serviço, confira o console'
         })
         console.log(error)
     }
