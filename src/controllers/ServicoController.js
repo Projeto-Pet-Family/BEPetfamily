@@ -26,7 +26,7 @@ async function lerServicoID(req,res){
 
         const [response] = await sql.query('call GetServicoID(?)',[idServico])
 
-        req.status(200).send(response)
+        req.status(200).send(response[0])
 
         await sql.end()
         
@@ -55,8 +55,6 @@ async function inserirServico(req,res){
             }
         })
 
-        await sql.end()
-
     }catch(error){
         res.status(500).json({
             message:'Erro ao criar serviço, confira o console'
@@ -76,8 +74,6 @@ async function excluirServico(req,res){
         res.status(200).json({
             message:'Servico deletado com sucesso!'
         })
-        
-        await sql.end()
 
     }catch(error){
         res.status(500).json({
@@ -105,8 +101,6 @@ async function atualizarServico(req,res){
                 preco
             }
         })
-
-        await sql.end()
 
     }catch(error){
         res.status(500).json({

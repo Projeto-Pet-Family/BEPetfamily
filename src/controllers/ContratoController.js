@@ -16,19 +16,19 @@ async function lerContratos(req,res){
     }
 }
 
-async function lerContratosID(req,res){
+async function filtrarContratosStatus(req,res){
     try{
         const sql = await sqlconnection()
 
-        const { idContrato } = req.params
+        const { idStatus } = req.params
 
-        const [result] = await sql.query('call GetContratoID(?)',idContrato)
+        const [result] = await sql.query('Call GetContratosStatus(?)',[idStatus])
 
         res.status(200).send(result)
 
     }catch(error){
         res.status(500).json({
-            message:'Erro ao ler o ID do contrato, confira o console'
+            message:'Erro ao filtrar os contratos, confira o console'
         })
         console.log(error)
     }
@@ -73,46 +73,49 @@ async function inserirContrato(req,res){
     }
 }
 
-async function updateContrato(req,res){
-    try{
-        const sql = await sqlconnection()
+async function updateContrato(req, res) {
+    try {
+        const sql = await sqlconnection();
 
-        const { idContrato } = req.params
+        const { idContrato } = req.params;
 
-        const { 
-            idHospedagem,
-            idUsuario,
-            idStatus,
-            dataInicio,
-            dataFim 
-        } = req.body
+        const {
+            idHospedagem = null,
+            idUsuario = null,
+            idStatus = null,
+            dataInicio = null,
+            dataFim = null,
+            valorTotal = null
+        } = req.body;
 
-        await sql.query('call UpdateContrato(?,?,?,?,?,?)',[
+        await sql.query('call UpdateContrato(?,?,?,?,?,?,?)', [
             idContrato,
             idHospedagem,
             idUsuario,
             idStatus,
             dataInicio,
-            dataFim
-        ])
+            dataFim,
+            valorTotal
+        ]);
 
         await res.status(200).json({
-            message:'Contrato atualizado com sucesso',
-            data:{
+            message: 'Contrato atualizado com sucesso',
+            data: {
                 idContrato,
                 idHospedagem,
                 idUsuario,
                 idStatus,
                 dataInicio,
-                dataFim 
+                dataFim,
+                valorTotal
             }
         })
 
-    }catch(error){
+    } catch (error) {
         res.status(500).json({
-            message:'Erro ao atualizar contrato, confira o console'
-        })
-        console.log(error)
+            message: 'Erro ao atualizar contrato, confira o console'
+        });
+        console.log(error);
     }
 }
 
@@ -136,8 +139,8 @@ async function excluirContrato(req,res){
 
 module.exports = {
     lerContratos,
-    lerContratosID,
+    filtrarContratosStatus,
     inserirContrato,
     updateContrato,
-    excluirContrato
+    excluirContrato,
 }

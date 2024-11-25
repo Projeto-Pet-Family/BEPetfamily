@@ -5,6 +5,7 @@ require('dotenv').config()
 const express = require('express')
 const app = express()
 const port = process.env.PORT
+const cors = require('cors')
 
 /*  */
 
@@ -28,6 +29,7 @@ app.get('/', (req,res) => {
 app.use(express.json())
 
 app.use(
+    cors(),
     ServicoRoute,
     StatusRoute,
     ContratoRoute,

@@ -16,24 +16,6 @@ async function lerStatus(req,res){
     }
 }
 
-async function lerStatusID(req,res){
-    try{
-        const sql = await sqlconnection()
-
-        const { idStatus } = req.params
-
-        const [result] = await sql.query('call GetStatusID(?)',idStatus)
-
-        res.status(200).send(result)
-
-    }catch(error){
-        res.status(500).json({
-            message:'Erro ao ler o ID do status, confira o console'
-        })
-        console.log(error)
-    }
-}
-
 async function inserirStatus(req,res){
     try{
         const sql = await sqlconnection()
@@ -103,7 +85,6 @@ async function deleteStatus(req,res){
 
 module.exports = {
     lerStatus,
-    lerStatusID,
     inserirStatus,
     updateStatus,
     deleteStatus
