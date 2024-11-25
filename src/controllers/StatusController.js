@@ -1,8 +1,9 @@
 const sqlconnection = require('../connections/SQLConnections.js')
 
 async function lerStatus(req,res){
+    let sql
     try{
-        const sql = await sqlconnection()
+        sql = await sqlconnection()
 
         const [result] = await sql.query('call GetStatus')
 
@@ -13,12 +14,17 @@ async function lerStatus(req,res){
             message:'Erro ao ler os status, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 
 async function inserirStatus(req,res){
+    let sql
     try{
-        const sql = await sqlconnection()
+        sql = await sqlconnection()
 
         const { descricao } = req.body
 
@@ -34,12 +40,17 @@ async function inserirStatus(req,res){
             message:'Erro ao criar o status, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 
 async function updateStatus(req,res){
+    let sql
     try{
-        const sql = await sqlconnection()
+        sql = await sqlconnection()
 
         const { idStatus } = req.params
         
@@ -60,12 +71,17 @@ async function updateStatus(req,res){
             message:'Erro ao atualizar os status, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 
 async function deleteStatus(req,res){
+    let sql
     try{
-        const sql = await sqlconnection()
+        sql = await sqlconnection()
 
         const { idStatus } = req.params
 
@@ -80,6 +96,10 @@ async function deleteStatus(req,res){
             message:'Erro ao deletar os status, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 

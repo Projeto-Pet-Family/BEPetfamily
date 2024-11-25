@@ -1,8 +1,10 @@
 const sqlconnection = require('../connections/SQLConnections.js')
 
 async function lerContratos(req,res){
+    let sql
+
     try{
-        const sql = await sqlconnection()
+        sql = await sqlconnection()
 
         const [result] = await sql.query('call GetContrato')
 
@@ -13,12 +15,18 @@ async function lerContratos(req,res){
             message:'Erro ao ler os contratos, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 
 async function filtrarContratosStatus(req,res){
+    let sql
+
     try{
-        const sql = await sqlconnection()
+        sql = await sqlconnection()
 
         const { idStatus } = req.params
 
@@ -26,17 +34,25 @@ async function filtrarContratosStatus(req,res){
 
         res.status(200).send(result)
 
+        
     }catch(error){
         res.status(500).json({
             message:'Erro ao filtrar os contratos, confira o console'
         })
         console.log(error)
+
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 
 async function inserirContrato(req,res){
+    let sql
+
     try{
-        const sql = await sqlconnection()
+        sql = await sqlconnection()
 
         const { 
             idHospedagem, 
@@ -70,12 +86,18 @@ async function inserirContrato(req,res){
             message:'Erro ao criar o contrato, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 
 async function updateContrato(req, res) {
+    let sql
+
     try {
-        const sql = await sqlconnection();
+        sql = await sqlconnection();
 
         const { idContrato } = req.params;
 
@@ -116,12 +138,18 @@ async function updateContrato(req, res) {
             message: 'Erro ao atualizar contrato, confira o console'
         });
         console.log(error);
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 
 async function excluirContrato(req,res){
+    let sql
+    
     try{
-        const sql = await sqlconnection()
+        sql = await sqlconnection()
 
         const { idContrato } = req.params
 
@@ -134,6 +162,10 @@ async function excluirContrato(req,res){
             message:'Erro ao excluir contrato, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 

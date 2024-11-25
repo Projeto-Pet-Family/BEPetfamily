@@ -1,8 +1,9 @@
 const sqlconnection = require('../connections/SQLConnections.js')
 
 async function lerServicos(req,res){
+    let sql
     try{
-        const sql = await sqlconnection()
+        sql = await sqlconnection()
 
         const [response] = await sql.query('call GetServicos')
 
@@ -15,12 +16,17 @@ async function lerServicos(req,res){
             message:'Erro ao ler serviços, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 
 async function lerServicoID(req,res){
+    let sql
     try{
-        const sql = await sqlconnection()
+        sql = await sqlconnection()
 
         const { idServico } = req.params
 
@@ -35,12 +41,17 @@ async function lerServicoID(req,res){
             message:'Erro ao ler ID do serviço, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 
 async function inserirServico(req,res){
+    let sql
     try{
-        const sql = await sqlconnection()
+        sql = await sqlconnection()
 
         const { descricao, preco, idHospedagem } = req.body
 
@@ -60,10 +71,15 @@ async function inserirServico(req,res){
             message:'Erro ao criar serviço, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 
 async function excluirServico(req,res){
+    let sql
     try{
         const sql = await sqlconnection()
 
@@ -80,12 +96,17 @@ async function excluirServico(req,res){
             message:'Erro ao excluir serviço, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 
 async function atualizarServico(req,res){
+    let sql
     try{
-        const sql = await sqlconnection()
+        sql = await sqlconnection()
         
         const { idServico } = req.params
 
@@ -107,6 +128,10 @@ async function atualizarServico(req,res){
             message:'Erro ao atualizar serviço, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 

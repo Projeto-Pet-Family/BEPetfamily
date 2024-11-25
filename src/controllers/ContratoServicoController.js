@@ -1,6 +1,8 @@
 const sqlconnection = require('../connections/SQLConnections.js')
 
 async function lerContratosServico(req,res){
+    let sql
+
     try{
         const sql = await sqlconnection()
 
@@ -13,7 +15,12 @@ async function lerContratosServico(req,res){
             message:'Erro ao ler contratos servicos, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
+
 }
 
 async function lerContratoServicoID(req,res){
@@ -31,10 +38,15 @@ async function lerContratoServicoID(req,res){
             message:'Erro ao ler ID do contrato servico, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 
 async function inserirContratoServico(req,res){
+    let sql
     try{
         const sql = await sqlconnection()
 
@@ -55,12 +67,17 @@ async function inserirContratoServico(req,res){
             message:'Erro ao inserir contrato servico, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 
 async function updateContratoServico(req,res){
+    let sql
     try{
-        const sql = await sqlconnection()
+        sql = await sqlconnection()
 
         const { idContratoServico } = req.params
 
@@ -89,13 +106,18 @@ async function updateContratoServico(req,res){
             message:'Erro ao atualizar contrato servico, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 
 }
 
 async function excluirContratoServico(req,res){
+    let sql
     try{
-        const sql = await sqlconnection()
+        sql = await sqlconnection()
 
         const { idContratoServico } = req.params
 
@@ -110,6 +132,10 @@ async function excluirContratoServico(req,res){
             message:'Erro ao excluir contrato servico, confira o console'
         })
         console.log(error)
+    }finally{
+        if(sql){
+            await sql.end()
+        }
     }
 }
 
