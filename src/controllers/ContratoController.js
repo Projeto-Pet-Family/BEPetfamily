@@ -59,15 +59,17 @@ async function inserirContrato(req,res){
             idUsuario, 
             idStatus, 
             dataInicio, 
-            dataFim 
+            dataFim,
+            valorTotal
         } = req.body
 
-        await sql.query('call InsertContrato(?,?,?,?,?)',[
+        await sql.query('call InsertContrato(?,?,?,?,?,?)',[
             idHospedagem,
             idUsuario,
             idStatus,
             dataInicio,
-            dataFim
+            dataFim,
+            valorTotal
         ])
 
         res.status(201).json({
@@ -77,7 +79,8 @@ async function inserirContrato(req,res){
                 idUsuario,
                 idStatus,
                 dataInicio,
-                dataFim
+                dataFim,
+                valorTotal
             }
         })
 
