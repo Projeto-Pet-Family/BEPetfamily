@@ -23,28 +23,6 @@ async function lerContratosServico(req,res){
 
 }
 
-async function lerContratoServicoID(req,res){
-    try{
-        const sql = await sqlconnection()
-
-        const { idContratoServico } = req.params
-
-        const [result] = await sql.query('call GetContratosServico(?)',idContratoServico)
-
-        res.status(200).send(result)
-
-    }catch(error){
-        res.status(500).json({
-            message:'Erro ao ler ID do contrato servico, confira o console'
-        })
-        console.log(error)
-    }finally{
-        if(sql){
-            await sql.end()
-        }
-    }
-}
-
 async function inserirContratoServico(req,res){
     let sql
     try{
@@ -141,7 +119,6 @@ async function excluirContratoServico(req,res){
 
 module.exports = {
     lerContratosServico,
-    lerContratoServicoID,
     inserirContratoServico,
     updateContratoServico,
     excluirContratoServico
