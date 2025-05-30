@@ -1,6 +1,6 @@
 const express = require('express');
 const Route = express.Router();
-const ContratoController = require('../controllers/ContratoController');
+const ContratoController = require('../../controllers/contrato/ContratoController.js')
 
 Route.get('/contrato', ContratoController.lerContratos);
 Route.get('/contrato/:idContrato', ContratoController.buscarContratoPorId);

@@ -1,6 +1,6 @@
 const express = require('express')
 const Router = express.Router()
-const HospedagemController = require('../controllers/HospedagemController.js')
+const HospedagemController = require('../../controllers/hospedagem/HospedagemController.js')
 
 Router.get('/hospedagens', HospedagemController.lerHospedagens);
 Router.get('/hospedagens/:idHospedagem', HospedagemController.buscarHospedagemPorId);

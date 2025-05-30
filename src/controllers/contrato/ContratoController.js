@@ -1,4 +1,4 @@
-const sqlconnection = require('../connections/SQLConnections.js');
+const sqlconnection = require('../../connections/SQLConnections.js');
 
 async function lerContratos(req, res) {
     let sql;
@@ -33,7 +33,7 @@ async function buscarContratoPorId(req, res) {
     try {
         sql = await sqlconnection();
         const { idContrato } = req.params;
-        
+
         const query = `
             SELECT c.*, h.nome as hospedagem_nome, u.nome as usuario_nome, s.descricao as status_descricao
             FROM Contrato c
@@ -42,7 +42,7 @@ async function buscarContratoPorId(req, res) {
             LEFT JOIN Status s ON c.idStatus = s.idStatus
             WHERE c.idContrato = ?
         `;
-        
+
         const [result] = await sql.query(query, [idContrato]);
 
         if (result.length === 0) {
@@ -69,7 +69,7 @@ async function criarContrato(req, res) {
     try {
         sql = await sqlconnection();
 
-        const { 
+        const {
             idHospedagem,
             idUsuario,
             idStatus,
@@ -87,7 +87,7 @@ async function criarContrato(req, res) {
         // Validar datas
         const inicio = new Date(dataInicio);
         const fim = dataFim ? new Date(dataFim) : null;
-        
+
         if (fim && fim < inicio) {
             return res.status(400).json({
                 message: 'Data fim não pode ser anterior à data início'
@@ -168,7 +168,7 @@ async function atualizarContrato(req, res) {
         if (dataInicio && dataFim) {
             const inicio = new Date(dataInicio);
             const fim = new Date(dataFim);
-            
+
             if (fim < inicio) {
                 return res.status(400).json({
                     message: 'Data fim não pode ser anterior à data início'
@@ -213,12 +213,12 @@ async function atualizarContrato(req, res) {
         let query = 'UPDATE Contrato SET ';
         const setClauses = [];
         const values = [];
-        
+
         for (const [key, value] of Object.entries(updateFields)) {
             setClauses.push(`${key} = ?`);
             values.push(value);
         }
-        
+
         query += setClauses.join(', ');
         query += ' WHERE idContrato = ?';
         values.push(idContrato);
@@ -248,7 +248,7 @@ async function atualizarContrato(req, res) {
 
 async function excluirContrato(req, res) {
     let sql;
-    
+
     try {
         sql = await sqlconnection();
         const { idContrato } = req.params;

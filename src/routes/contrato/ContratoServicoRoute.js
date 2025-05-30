@@ -1,6 +1,6 @@
 const express = require('express');
 const Router = express.Router();
-const ContratoServicoController = require('../controllers/ContratoServicoController.js');
+const ContratoServicoController = require('../../controllers/contrato/ContratoServicoController.js')
 
 // Rotas CRUD
 Router.get('/contratoservico', ContratoServicoController.lerContratosServico);

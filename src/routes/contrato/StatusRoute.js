@@ -1,6 +1,6 @@
 const express = require('express')
 const Router = express.Router()
-const StatusController = require('../controllers/StatusController.js')
+const StatusController = require('../../controllers/contrato/StatusController.js')
 
 Router.get('/status', StatusController.lerStatus)
 Router.post('/status', StatusController.inserirStatus)

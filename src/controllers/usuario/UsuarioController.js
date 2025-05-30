@@ -1,4 +1,4 @@
-const sqlconnection = require('../connections/SQLConnections.js');
+const sqlconnection = require('../../connections/SQLConnections.js');
 
 async function lerUsuarios(req, res) {
     let sql;
@@ -61,17 +61,6 @@ async function inserirUsuario(req, res) {
             esqueceuSenha = false,
             dataCadastro = new Date()
         } = req.body;
-
-        const [existingUser] = await sql.query(
-            'SELECT * FROM Usuario WHERE cpf = ? OR email = ?', 
-            [cpf, email]
-        );
-
-        if (existingUser.length > 0) {
-            return res.status(400).json({
-                message: 'Já existe um usuário com este CPF ou Email'
-            });
-        }
 
         const [result] = await sql.query(
             'INSERT INTO Usuario (nome, cpf, email, telefone, senha, ativado, desativado, esqueceuSenha, dataCadastro) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',

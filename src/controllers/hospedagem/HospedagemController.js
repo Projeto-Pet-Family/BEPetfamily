@@ -1,4 +1,4 @@
-const sqlconnection = require('../connections/SQLConnections.js');
+const sqlconnection = require('../../connections/SQLConnections.js');
 
 async function lerHospedagens(req, res) {
     let sql;

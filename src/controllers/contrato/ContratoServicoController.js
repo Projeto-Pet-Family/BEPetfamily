@@ -1,4 +1,4 @@
-const sqlconnection = require('../connections/SQLConnections.js');
+const sqlconnection = require('../../connections/SQLConnections.js');
 
 async function lerContratosServico(req, res) {
     let sql;
@@ -8,9 +8,9 @@ async function lerContratosServico(req, res) {
         res.status(200).json(result);
     } catch (error) {
         console.error('Erro ao ler contratos serviços:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             message: 'Erro ao buscar contratos serviços',
-            error: error.message 
+            error: error.message
         });
     } finally {
         if (sql) await sql.end();
@@ -23,17 +23,17 @@ async function buscarContratoServicoPorId(req, res) {
         sql = await sqlconnection();
         const { idContratoServico } = req.params;
         const [result] = await sql.query('SELECT * FROM ContratoServico WHERE idContratoServico = ?', [idContratoServico]);
-        
+
         if (result.length === 0) {
             return res.status(404).json({ message: 'Contrato serviço não encontrado' });
         }
-        
+
         res.status(200).json(result[0]);
     } catch (error) {
         console.error('Erro ao buscar contrato serviço:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             message: 'Erro ao buscar contrato serviço',
-            error: error.message 
+            error: error.message
         });
     } finally {
         if (sql) await sql.end();
@@ -72,9 +72,9 @@ async function inserirContratoServico(req, res) {
         });
     } catch (error) {
         console.error('Erro ao inserir contrato serviço:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             message: 'Erro ao criar contrato serviço',
-            error: error.message 
+            error: error.message
         });
     } finally {
         if (sql) await sql.end();
@@ -120,9 +120,9 @@ async function atualizarContratoServico(req, res) {
         });
     } catch (error) {
         console.error('Erro ao atualizar contrato serviço:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             message: 'Erro ao atualizar contrato serviço',
-            error: error.message 
+            error: error.message
         });
     } finally {
         if (sql) await sql.end();
@@ -149,9 +149,9 @@ async function excluirContratoServico(req, res) {
         });
     } catch (error) {
         console.error('Erro ao excluir contrato serviço:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             message: 'Erro ao excluir contrato serviço',
-            error: error.message 
+            error: error.message
         });
     } finally {
         if (sql) await sql.end();
