@@ -5,7 +5,7 @@ async function lerStatus(req,res){
     try{
         sql = await sqlconnection()
 
-        const [result] = await sql.query('call GetStatus')
+        const [result] = await sql.query('select * from Status')
 
         res.status(200).send(result)
 

@@ -13,6 +13,9 @@ const ServicoRoute = require('./routes/ServicoRoute.js')
 const StatusRoute = require('./routes/StatusRoute.js')
 const ContratoRoute = require('./routes/ContratoRoute.js')
 const ContratoServicoRoute = require('./routes/ContratoServicoRoute.js')
+const UsuarioRoute = require('./routes/UsuarioRoute.js')
+const PetRoute = require('./routes/PetRoute.js')
+const HospedagemRoute = require('./routes/HospedagemRoute.js')
 
 /*  */
 
@@ -33,5 +36,8 @@ app.use(
     ServicoRoute,
     StatusRoute,
     ContratoRoute,
-    ContratoServicoRoute
+    ContratoServicoRoute,
+    UsuarioRoute,
+    PetRoute,
+    HospedagemRoute,
 )
