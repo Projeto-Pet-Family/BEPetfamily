@@ -18,7 +18,7 @@ const ContratoServicoRoute = require('./routes/contrato/ContratoServicoRoute.js'
 const HospedagemRoute = require('./routes/hospedagem/HospedagemRoute.js')
 const ServicoRoute = require('./routes/hospedagem/ServicoRoute.js')
 
-const EstadoRoute = require('./routes/hospedagem/endereco/EnderecoRoute.js')
+const EstadoRoute = require('./routes/hospedagem/endereco/EstadoRoute.js')
 const CidadeRoute = require('./routes/hospedagem/endereco/CidadeRoute.js')
 const BairroRoute = require('./routes/hospedagem/endereco/BairroRoute.js')
 const LogradouroRoute = require('./routes/hospedagem/endereco/LogradouroRoute.js')

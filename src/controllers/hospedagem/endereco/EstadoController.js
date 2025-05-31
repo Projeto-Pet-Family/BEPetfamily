@@ -1,11 +1,34 @@
 const sqlconnection = require('../../../connections/SQLConnections.js');
 
+// Listar todos os estados com possibilidade de filtro por sigla
 async function lerEstados(req, res) {
     let sql;
 
     try {
         sql = await sqlconnection();
-        const [result] = await sql.query('SELECT * FROM Estado ORDER BY nome');
+        
+        const { sigla, nome } = req.query;
+        let query = `SELECT * FROM Estado`;
+        const params = [];
+        let whereClauses = [];
+        
+        if (sigla) {
+            whereClauses.push('sigla = ?');
+            params.push(sigla.toUpperCase());
+        }
+        
+        if (nome) {
+            whereClauses.push('nome LIKE ?');
+            params.push(`%${nome}%`);
+        }
+        
+        if (whereClauses.length > 0) {
+            query += ' WHERE ' + whereClauses.join(' AND ');
+        }
+        
+        query += ' ORDER BY nome';
+        
+        const [result] = await sql.query(query, params);
         res.status(200).json(result);
     } catch (error) {
         res.status(500).json({
@@ -20,13 +43,18 @@ async function lerEstados(req, res) {
     }
 }
 
+// Buscar estado por ID
 async function buscarEstadoPorId(req, res) {
     let sql;
 
     try {
         sql = await sqlconnection();
         const { idEstado } = req.params;
-        const [result] = await sql.query('SELECT * FROM Estado WHERE idEstado = ?', [idEstado]);
+        
+        const [result] = await sql.query(
+            'SELECT * FROM Estado WHERE idEstado = ?', 
+            [idEstado]
+        );
 
         if (result.length === 0) {
             return res.status(404).json({ message: 'Estado não encontrado' });
@@ -46,54 +74,88 @@ async function buscarEstadoPorId(req, res) {
     }
 }
 
+// Buscar estado por sigla
+async function buscarEstadoPorSigla(req, res) {
+    let sql;
+
+    try {
+        sql = await sqlconnection();
+        const { sigla } = req.params;
+        
+        const [result] = await sql.query(
+            'SELECT * FROM Estado WHERE sigla = ?', 
+            [sigla.toUpperCase()]
+        );
+
+        if (result.length === 0) {
+            return res.status(404).json({ message: 'Estado não encontrado' });
+        }
+
+        res.status(200).json(result[0]);
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao buscar estado por sigla',
+            error: error.message
+        });
+        console.error('Erro ao buscar estado por sigla:', error);
+    } finally {
+        if (sql) {
+            await sql.end();
+        }
+    }
+}
+
+// Criar novo estado
 async function criarEstado(req, res) {
     let sql;
 
     try {
         sql = await sqlconnection();
 
-        const { 
-            nome,
-            sigla
-        } = req.body;
+        const { nome, sigla } = req.body;
 
-        // Validar campos obrigatórios
+        // Validações
         if (!nome || !sigla) {
             return res.status(400).json({
                 message: 'Nome e sigla são campos obrigatórios'
             });
         }
 
-        // Validar sigla (2 caracteres)
-        if (sigla.length !== 2) {
+        if (sigla.length !== 2 || !/^[A-Za-z]{2}$/.test(sigla)) {
             return res.status(400).json({
-                message: 'Sigla deve ter exatamente 2 caracteres'
+                message: 'A sigla deve ter exatamente 2 letras'
             });
         }
 
-        // Inserir no banco de dados
+        if (nome.length < 3 || nome.length > 30) {
+            return res.status(400).json({
+                message: 'O nome do estado deve ter entre 3 e 30 caracteres'
+            });
+        }
+
+        // Inserir no banco
         const [result] = await sql.query(
             'INSERT INTO Estado (nome, sigla) VALUES (?, ?)',
             [nome, sigla.toUpperCase()]
         );
 
-        const novoEstado = {
-            idEstado: result.insertId,
-            nome,
-            sigla: sigla.toUpperCase()
-        };
+        // Buscar o estado criado
+        const [novoEstado] = await sql.query(
+            'SELECT * FROM Estado WHERE idEstado = ?', 
+            [result.insertId]
+        );
 
         res.status(201).json({
             message: 'Estado criado com sucesso',
-            data: novoEstado
+            data: novoEstado[0]
         });
 
     } catch (error) {
-        // Verificar se é erro de duplicação (sigla ou nome já existem)
         if (error.code === 'ER_DUP_ENTRY') {
-            return res.status(409).json({
-                message: 'Já existe um estado com este nome ou sigla'
-            });
+            const message = error.message.includes('sigla') 
+                ? 'Já existe um estado com esta sigla' 
+                : 'Já existe um estado com este nome';
+            return res.status(409).json({ message });
         }
         
         res.status(500).json({
@@ -108,57 +170,61 @@ async function criarEstado(req, res) {
     }
 }
 
+// Atualizar estado existente
 async function atualizarEstado(req, res) {
     let sql;
 
     try {
         sql = await sqlconnection();
         const { idEstado } = req.params;
-
-        const {
-            nome,
-            sigla
-        } = req.body;
+        const { nome, sigla } = req.body;
 
         // Verificar se o estado existe
-        const [estado] = await sql.query('SELECT * FROM Estado WHERE idEstado = ?', [idEstado]);
+        const [estado] = await sql.query(
+            'SELECT * FROM Estado WHERE idEstado = ?', 
+            [idEstado]
+        );
         if (estado.length === 0) {
             return res.status(404).json({ message: 'Estado não encontrado' });
         }
 
-        // Validar sigla se for fornecida
-        if (sigla && sigla.length !== 2) {
-            return res.status(400).json({
-                message: 'Sigla deve ter exatamente 2 caracteres'
+        // Validações
+        const updateFields = {};
+        if (nome !== undefined) {
+            if (nome.length < 3 || nome.length > 30) {
+                return res.status(400).json({
+                    message: 'O nome do estado deve ter entre 3 e 30 caracteres'
+                });
+            }
+            updateFields.nome = nome;
+        }
+
+        if (sigla !== undefined) {
+            if (sigla.length !== 2 || !/^[A-Za-z]{2}$/.test(sigla)) {
+                return res.status(400).json({
+                    message: 'A sigla deve ter exatamente 2 letras'
+                });
+            }
+            updateFields.sigla = sigla.toUpperCase();
+        }
+
+        if (Object.keys(updateFields).length === 0) {
+            return res.status(400).json({ 
+                message: 'Nenhum campo válido para atualização fornecido' 
             });
         }
 
-        // Construir a query dinamicamente
-        const updateFields = {};
-        if (nome) updateFields.nome = nome;
-        if (sigla) updateFields.sigla = sigla.toUpperCase();
-
-        if (Object.keys(updateFields).length === 0) {
-            return res.status(400).json({ message: 'Nenhum campo válido para atualização fornecido' });
-        }
-
-        let query = 'UPDATE Estado SET ';
-        const setClauses = [];
-        const values = [];
-        
-        for (const [key, value] of Object.entries(updateFields)) {
-            setClauses.push(`${key} = ?`);
-            values.push(value);
-        }
-        
-        query += setClauses.join(', ');
-        query += ' WHERE idEstado = ?';
-        values.push(idEstado);
-
-        await sql.query(query, values);
+        // Atualizar no banco
+        await sql.query(
+            'UPDATE Estado SET ? WHERE idEstado = ?',
+            [updateFields, idEstado]
+        );
 
         // Buscar o estado atualizado
-        const [updatedEstado] = await sql.query('SELECT * FROM Estado WHERE idEstado = ?', [idEstado]);
+        const [updatedEstado] = await sql.query(
+            'SELECT * FROM Estado WHERE idEstado = ?', 
+            [idEstado]
+        );
 
         res.status(200).json({
             message: 'Estado atualizado com sucesso',
@@ -166,11 +232,11 @@ async function atualizarEstado(req, res) {
         });
 
     } catch (error) {
-        // Verificar se é erro de duplicação (sigla ou nome já existem)
         if (error.code === 'ER_DUP_ENTRY') {
-            return res.status(409).json({
-                message: 'Já existe um estado com este nome ou sigla'
-            });
+            const message = error.message.includes('sigla') 
+                ? 'Já existe um estado com esta sigla' 
+                : 'Já existe um estado com este nome';
+            return res.status(409).json({ message });
         }
         
         res.status(500).json({
@@ -185,6 +251,7 @@ async function atualizarEstado(req, res) {
     }
 }
 
+// Excluir estado
 async function excluirEstado(req, res) {
     let sql;
     
@@ -193,9 +260,25 @@ async function excluirEstado(req, res) {
         const { idEstado } = req.params;
 
         // Verificar se o estado existe
-        const [estado] = await sql.query('SELECT * FROM Estado WHERE idEstado = ?', [idEstado]);
+        const [estado] = await sql.query(
+            'SELECT * FROM Estado WHERE idEstado = ?', 
+            [idEstado]
+        );
+        
         if (estado.length === 0) {
             return res.status(404).json({ message: 'Estado não encontrado' });
+        }
+
+        // Verificar se há cidades associadas
+        const [cidades] = await sql.query(
+            'SELECT 1 FROM Cidade WHERE idEstado = ? LIMIT 1',
+            [idEstado]
+        );
+        
+        if (cidades.length > 0) {
+            return res.status(400).json({
+                message: 'Não é possível excluir o estado pois existem cidades vinculadas a ele'
+            });
         }
 
         await sql.query('DELETE FROM Estado WHERE idEstado = ?', [idEstado]);
@@ -206,13 +289,6 @@ async function excluirEstado(req, res) {
         });
 
     } catch (error) {
-        // Verificar se o erro é devido a uma restrição de chave estrangeira
-        if (error.code === 'ER_ROW_IS_REFERENCED_2') {
-            return res.status(400).json({
-                message: 'Não é possível excluir o estado pois está sendo utilizado em cidades'
-            });
-        }
-
         res.status(500).json({
             message: 'Erro ao excluir estado',
             error: error.message
@@ -228,6 +304,7 @@ async function excluirEstado(req, res) {
 module.exports = {
     lerEstados,
     buscarEstadoPorId,
+    buscarEstadoPorSigla,
     criarEstado,
     atualizarEstado,
     excluirEstado

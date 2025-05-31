@@ -5,7 +5,7 @@ async function lerCEPs(req, res) {
 
     try {
         sql = await sqlconnection();
-        
+
         // Adiciona filtro por logradouro se fornecido
         const { logradouroId } = req.query;
         let query = `
@@ -17,14 +17,14 @@ async function lerCEPs(req, res) {
             JOIN Estado e ON ci.idEstado = e.idEstado
         `;
         const params = [];
-        
+
         if (logradouroId) {
             query += ' WHERE c.idLogradouro = ?';
             params.push(logradouroId);
         }
-        
+
         query += ' ORDER BY c.codigo';
-        
+
         const [result] = await sql.query(query, params);
         res.status(200).json(result);
     } catch (error) {
@@ -46,7 +46,7 @@ async function buscarCEPPorId(req, res) {
     try {
         sql = await sqlconnection();
         const { idCEP } = req.params;
-        
+
         const [result] = await sql.query(`
             SELECT c.*, l.nome as logradouro, b.nome as bairro, ci.nome as cidade, e.nome as estado, e.sigla 
             FROM CEP c
@@ -81,7 +81,7 @@ async function criarCEP(req, res) {
     try {
         sql = await sqlconnection();
 
-        const { 
+        const {
             codigo,
             idLogradouro
         } = req.body;
@@ -138,7 +138,7 @@ async function criarCEP(req, res) {
                 message: 'Já existe um CEP com este código'
             });
         }
-        
+
         res.status(500).json({
             message: 'Erro ao criar CEP',
             error: error.message
@@ -201,12 +201,12 @@ async function atualizarCEP(req, res) {
         let query = 'UPDATE CEP SET ';
         const setClauses = [];
         const values = [];
-        
+
         for (const [key, value] of Object.entries(updateFields)) {
             setClauses.push(`${key} = ?`);
             values.push(value);
         }
-        
+
         query += setClauses.join(', ');
         query += ' WHERE idCEP = ?';
         values.push(idCEP);
@@ -236,7 +236,7 @@ async function atualizarCEP(req, res) {
                 message: 'Já existe um CEP com este código'
             });
         }
-        
+
         res.status(500).json({
             message: 'Erro ao atualizar CEP',
             error: error.message
@@ -251,7 +251,7 @@ async function atualizarCEP(req, res) {
 
 async function excluirCEP(req, res) {
     let sql;
-    
+
     try {
         sql = await sqlconnection();
         const { idCEP } = req.params;
@@ -266,7 +266,7 @@ async function excluirCEP(req, res) {
             JOIN Estado e ON ci.idEstado = e.idEstado
             WHERE c.idCEP = ?
         `, [idCEP]);
-        
+
         if (cep.length === 0) {
             return res.status(404).json({ message: 'CEP não encontrado' });
         }
