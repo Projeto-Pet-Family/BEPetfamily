@@ -8,17 +8,12 @@ async function listarServicosPorHospedagem(req, res) {
 
         const query = `
             SELECT 
-                hs.idHospedagemServico,
                 s.idServico,
                 s.descricao,
-                s.categoria,
-                hs.preco,
-                hs.ativo,
-                hs.observacoes
-            FROM HospedagemServico hs
-            JOIN Servico s ON hs.idServico = s.idServico
-            WHERE hs.idHospedagem = ?
-            ORDER BY s.categoria, s.descricao
+                s.preco
+            FROM Servico s
+            WHERE s.idHospedagem = ?
+            ORDER BY s.descricao
         `;
 
         const [result] = await sql.query(query, [idHospedagem]);
@@ -41,12 +36,12 @@ async function adicionarServicoAHospedagem(req, res) {
     try {
         sql = await sqlconnection();
         const { idHospedagem } = req.params;
-        const { idServico, preco, observacoes } = req.body;
+        const { descricao, preco } = req.body;
 
         // Validações
-        if (!idServico || preco === undefined) {
+        if (!descricao || preco === undefined) {
             return res.status(400).json({
-                message: 'idServico e preco são obrigatórios'
+                message: 'descricao e preco são obrigatórios'
             });
         }
 
@@ -62,50 +57,33 @@ async function adicionarServicoAHospedagem(req, res) {
             return res.status(404).json({ message: 'Hospedagem não encontrada' });
         }
 
-        // Verificar se o serviço existe
-        const [servico] = await sql.query('SELECT 1 FROM Servico WHERE idServico = ?', [idServico]);
-        if (servico.length === 0) {
-            return res.status(404).json({ message: 'Serviço não encontrado' });
-        }
-
-        // Inserir o serviço para a hospedagem
+        // Inserir o novo serviço
         const [result] = await sql.query(
-            'INSERT INTO HospedagemServico (idHospedagem, idServico, preco, observacoes) VALUES (?, ?, ?, ?)',
-            [idHospedagem, idServico, preco, observacoes || null]
+            'INSERT INTO Servico (idHospedagem, descricao, preco) VALUES (?, ?, ?)',
+            [idHospedagem, descricao, preco]
         );
 
         // Buscar o registro criado
         const [novoServico] = await sql.query(`
             SELECT 
-                hs.idHospedagemServico,
-                s.idServico,
-                s.descricao,
-                s.categoria,
-                hs.preco,
-                hs.ativo,
-                hs.observacoes
-            FROM HospedagemServico hs
-            JOIN Servico s ON hs.idServico = s.idServico
-            WHERE hs.idHospedagemServico = ?
+                idServico,
+                descricao,
+                preco
+            FROM Servico
+            WHERE idServico = ?
         `, [result.insertId]);
 
         res.status(201).json({
-            message: 'Serviço adicionado à hospedagem com sucesso',
+            message: 'Serviço criado com sucesso',
             data: novoServico[0]
         });
 
     } catch (error) {
-        if (error.code === 'ER_DUP_ENTRY') {
-            return res.status(409).json({
-                message: 'Este serviço já está cadastrado para esta hospedagem'
-            });
-        }
-        
         res.status(500).json({
-            message: 'Erro ao adicionar serviço à hospedagem',
+            message: 'Erro ao criar serviço',
             error: error.message
         });
-        console.error('Erro ao adicionar serviço:', error);
+        console.error('Erro ao criar serviço:', error);
     } finally {
         if (sql) {
             await sql.end();
@@ -113,9 +91,101 @@ async function adicionarServicoAHospedagem(req, res) {
     }
 }
 
-// Outras funções do controller (atualizar, remover, etc.)
+async function atualizarServico(req, res) {
+    let sql;
+    try {
+        sql = await sqlconnection();
+        const { idServico } = req.params;
+        const { descricao, preco } = req.body;
+
+        // Validações
+        if (!descricao && !preco) {
+            return res.status(400).json({
+                message: 'Pelo menos um campo (descricao ou preco) deve ser fornecido'
+            });
+        }
+
+        if (preco !== undefined && (isNaN(preco) || preco < 0)) {
+            return res.status(400).json({
+                message: 'Preço deve ser um número positivo'
+            });
+        }
+
+        // Verificar se o serviço existe
+        const [servico] = await sql.query('SELECT 1 FROM Servico WHERE idServico = ?', [idServico]);
+        if (servico.length === 0) {
+            return res.status(404).json({ message: 'Serviço não encontrado' });
+        }
+
+        // Atualizar o serviço
+        await sql.query(
+            'UPDATE Servico SET descricao = COALESCE(?, descricao), preco = COALESCE(?, preco) WHERE idServico = ?',
+            [descricao, preco, idServico]
+        );
+
+        // Buscar o registro atualizado
+        const [servicoAtualizado] = await sql.query(`
+            SELECT 
+                idServico,
+                descricao,
+                preco
+            FROM Servico
+            WHERE idServico = ?
+        `, [idServico]);
+
+        res.status(200).json({
+            message: 'Serviço atualizado com sucesso',
+            data: servicoAtualizado[0]
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao atualizar serviço',
+            error: error.message
+        });
+        console.error('Erro ao atualizar serviço:', error);
+    } finally {
+        if (sql) {
+            await sql.end();
+        }
+    }
+}
+
+async function removerServico(req, res) {
+    let sql;
+    try {
+        sql = await sqlconnection();
+        const { idServico } = req.params;
+
+        // Verificar se o serviço existe
+        const [servico] = await sql.query('SELECT 1 FROM Servico WHERE idServico = ?', [idServico]);
+        if (servico.length === 0) {
+            return res.status(404).json({ message: 'Serviço não encontrado' });
+        }
+
+        // Remover o serviço
+        await sql.query('DELETE FROM Servico WHERE idServico = ?', [idServico]);
+
+        res.status(200).json({
+            message: 'Serviço removido com sucesso'
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao remover serviço',
+            error: error.message
+        });
+        console.error('Erro ao remover serviço:', error);
+    } finally {
+        if (sql) {
+            await sql.end();
+        }
+    }
+}
+
 module.exports = {
     listarServicosPorHospedagem,
-    adicionarServicoAHospedagem
-    // ... outras funções
+    adicionarServicoAHospedagem,
+    atualizarServico,
+    removerServico
 };
