@@ -18,6 +18,13 @@ const ContratoServicoRoute = require('./routes/contrato/ContratoServicoRoute.js'
 const HospedagemRoute = require('./routes/hospedagem/HospedagemRoute.js')
 const ServicoRoute = require('./routes/hospedagem/ServicoRoute.js')
 
+const EstadoRoute = require('./routes/hospedagem/endereco/EnderecoRoute.js')
+const CidadeRoute = require('./routes/hospedagem/endereco/CidadeRoute.js')
+const BairroRoute = require('./routes/hospedagem/endereco/BairroRoute.js')
+const LogradouroRoute = require('./routes/hospedagem/endereco/LogradouroRoute.js')
+const CepRoute = require('./routes/hospedagem/endereco/CepRoute.js')
+const EnderecoRoute = require('./routes/hospedagem/endereco/EnderecoRoute.js')
+
 const PetRoute = require('./routes/pet/PetRoute.js')
 const PorteRoute = require('./routes/pet/PorteRoute.js')
 const EspecieRoute = require('./routes/pet/EspecieRoute.js')
@@ -39,14 +46,24 @@ app.use(express.json())
 
 app.use(
     cors(),
-    ServicoRoute,
+    UsuarioRoute,
+
     StatusRoute,
     ContratoRoute,
     ContratoServicoRoute,
-    UsuarioRoute,
-    PetRoute,
+
     HospedagemRoute,
+    ServicoRoute,
+    
+    EstadoRoute,
+    CidadeRoute,
+    BairroRoute,
+    LogradouroRoute,
+    CepRoute,
+    EnderecoRoute,
+
+    PetRoute,
     PorteRoute,
     EspecieRoute,
-    RacaRoute
+    RacaRoute,
 )

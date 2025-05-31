@@ -60,14 +60,12 @@ async function inserirRaca(req, res) {
 
         const { descricao, idEspecie } = req.body
 
-        // Validações
         if (!descricao || !idEspecie) {
             return res.status(400).json({
                 message: 'Descrição e ID da espécie são obrigatórios'
             })
         }
 
-        // Verifica se a espécie existe
         const [especie] = await sql.query('SELECT 1 FROM Especie WHERE idEspecie = ?', [idEspecie])
         if (!especie.length) {
             return res.status(400).json({
