@@ -1,4 +1,4 @@
-const sqlconnection = require('../../connections/SQLConnections.js');
+/* const sqlconnection = require('../../connections/SQLConnections.js');
 
 async function listarCargos(req, res) {
     let sql;
@@ -198,4 +198,4 @@ module.exports = {
     criarCargo,
     atualizarCargo,
     excluirCargo
-};
+}; */
