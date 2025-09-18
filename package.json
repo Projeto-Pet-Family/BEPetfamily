@@ -18,6 +18,10 @@
     "express": "^4.21.1",
     "mysql2": "^3.11.4",
     "nodemon": "^3.1.10",
+    "pg": "^8.16.3",
+    "pg-hstore": "^2.3.4",
+    "pg-pool": "^3.10.1",
+    "sequelize": "^6.37.7",
     "serverless-http": "^4.0.0"
   }
 }

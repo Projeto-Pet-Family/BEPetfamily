@@ -1,10 +1,10 @@
-const sqlconnection = require('../../connections/SQLConnections.js');
+const pgconnection = require('../../connections/SQLConnections.js');
 
 async function lerContratos(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pgconnection();
         const query = `
             SELECT c.*, h.nome as hospedagem_nome, u.nome as usuario_nome, s.descricao as status_descricao
             FROM Contrato c
@@ -12,8 +12,8 @@ async function lerContratos(req, res) {
             LEFT JOIN Usuario u ON c.idUsuario = u.idUsuario
             LEFT JOIN Status s ON c.idStatus = s.idStatus
         `;
-        const [result] = await sql.query(query);
-        res.status(200).json(result);
+        const result = await client.query(query);
+        res.status(200).json(result.rows);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao listar contratos',
@@ -21,17 +21,17 @@ async function lerContratos(req, res) {
         });
         console.error('Erro ao listar contratos:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function buscarContratoPorId(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pgconnection();
         const { idContrato } = req.params;
 
         const query = `
@@ -40,16 +40,16 @@ async function buscarContratoPorId(req, res) {
             LEFT JOIN Hospedagem h ON c.idHospedagem = h.idHospedagem
             LEFT JOIN Usuario u ON c.idUsuario = u.idUsuario
             LEFT JOIN Status s ON c.idStatus = s.idStatus
-            WHERE c.idContrato = ?
+            WHERE c.idContrato = $1
         `;
 
-        const [result] = await sql.query(query, [idContrato]);
+        const result = await client.query(query, [idContrato]);
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Contrato não encontrado' });
         }
 
-        res.status(200).json(result[0]);
+        res.status(200).json(result.rows[0]);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao buscar contrato',
@@ -57,17 +57,17 @@ async function buscarContratoPorId(req, res) {
         });
         console.error('Erro ao buscar contrato:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        {
+            await client.end();
         }
     }
 }
 
 async function criarContrato(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pgconnection();
 
         const {
             idHospedagem,
@@ -95,39 +95,41 @@ async function criarContrato(req, res) {
         }
 
         // Verificar existência das entidades relacionadas
-        const [hospedagem] = await sql.query('SELECT idHospedagem FROM Hospedagem WHERE idHospedagem = ?', [idHospedagem]);
-        if (hospedagem.length === 0) {
+        const hospedagemResult = await client.query(
+            'SELECT idHospedagem FROM Hospedagem WHERE idHospedagem = $1', 
+            [idHospedagem]
+        );
+        if (hospedagemResult.rows.length === 0) {
             return res.status(400).json({ message: 'Hospedagem não encontrada' });
         }
 
-        const [usuario] = await sql.query('SELECT idUsuario FROM Usuario WHERE idUsuario = ?', [idUsuario]);
-        if (usuario.length === 0) {
+        const usuarioResult = await client.query(
+            'SELECT idUsuario FROM Usuario WHERE idUsuario = $1', 
+            [idUsuario]
+        );
+        if (usuarioResult.rows.length === 0) {
             return res.status(400).json({ message: 'Usuário não encontrado' });
         }
 
-        const [status] = await sql.query('SELECT idStatus FROM Status WHERE idStatus = ?', [idStatus]);
-        if (status.length === 0) {
+        const statusResult = await client.query(
+            'SELECT idStatus FROM Status WHERE idStatus = $1', 
+            [idStatus]
+        );
+        if (statusResult.rows.length === 0) {
             return res.status(400).json({ message: 'Status não encontrado' });
         }
 
-        // Inserir contrato
-        const [result] = await sql.query(
-            'INSERT INTO Contrato (idHospedagem, idUsuario, idStatus, dataInicio, dataFim) VALUES (?, ?, ?, ?, ?)',
+        // Inserir contrato e retornar os dados
+        const result = await client.query(
+            `INSERT INTO Contrato (idHospedagem, idUsuario, idStatus, dataInicio, dataFim) 
+             VALUES ($1, $2, $3, $4, $5) 
+             RETURNING *`,
             [idHospedagem, idUsuario, idStatus, dataInicio, dataFim]
         );
 
-        const novoContrato = {
-            idContrato: result.insertId,
-            idHospedagem,
-            idUsuario,
-            idStatus,
-            dataInicio,
-            dataFim
-        };
-
         res.status(201).json({
             message: 'Contrato criado com sucesso',
-            data: novoContrato
+            data: result.rows[0]
         });
 
     } catch (error) {
@@ -137,17 +139,17 @@ async function criarContrato(req, res) {
         });
         console.error('Erro ao criar contrato:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function atualizarContrato(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pgconnection();
         const { idContrato } = req.params;
 
         const {
@@ -159,8 +161,11 @@ async function atualizarContrato(req, res) {
         } = req.body;
 
         // Verificar se o contrato existe
-        const [contrato] = await sql.query('SELECT * FROM Contrato WHERE idContrato = ?', [idContrato]);
-        if (contrato.length === 0) {
+        const contratoResult = await client.query(
+            'SELECT * FROM Contrato WHERE idContrato = $1', 
+            [idContrato]
+        );
+        if (contratoResult.rows.length === 0) {
             return res.status(404).json({ message: 'Contrato não encontrado' });
         }
 
@@ -178,59 +183,88 @@ async function atualizarContrato(req, res) {
 
         // Verificar entidades relacionadas se fornecidas
         if (idHospedagem) {
-            const [hospedagem] = await sql.query('SELECT idHospedagem FROM Hospedagem WHERE idHospedagem = ?', [idHospedagem]);
-            if (hospedagem.length === 0) {
+            const hospedagemResult = await client.query(
+                'SELECT idHospedagem FROM Hospedagem WHERE idHospedagem = $1', 
+                [idHospedagem]
+            );
+            if (hospedagemResult.rows.length === 0) {
                 return res.status(400).json({ message: 'Hospedagem não encontrada' });
             }
         }
 
         if (idUsuario) {
-            const [usuario] = await sql.query('SELECT idUsuario FROM Usuario WHERE idUsuario = ?', [idUsuario]);
-            if (usuario.length === 0) {
+            const usuarioResult = await client.query(
+                'SELECT idUsuario FROM Usuario WHERE idUsuario = $1', 
+                [idUsuario]
+            );
+            if (usuarioResult.rows.length === 0) {
                 return res.status(400).json({ message: 'Usuário não encontrado' });
             }
         }
 
         if (idStatus) {
-            const [status] = await sql.query('SELECT idStatus FROM Status WHERE idStatus = ?', [idStatus]);
-            if (status.length === 0) {
+            const statusResult = await client.query(
+                'SELECT idStatus FROM Status WHERE idStatus = $1', 
+                [idStatus]
+            );
+            if (statusResult.rows.length === 0) {
                 return res.status(400).json({ message: 'Status não encontrado' });
             }
         }
 
         // Construir query dinâmica
         const updateFields = {};
-        if (idHospedagem !== undefined) updateFields.idHospedagem = idHospedagem;
-        if (idUsuario !== undefined) updateFields.idUsuario = idUsuario;
-        if (idStatus !== undefined) updateFields.idStatus = idStatus;
-        if (dataInicio) updateFields.dataInicio = dataInicio;
-        if (dataFim !== undefined) updateFields.dataFim = dataFim;
+        const values = [];
+        let paramCount = 1;
+
+        if (idHospedagem !== undefined) {
+            updateFields.idHospedagem = `$${paramCount}`;
+            values.push(idHospedagem);
+            paramCount++;
+        }
+        if (idUsuario !== undefined) {
+            updateFields.idUsuario = `$${paramCount}`;
+            values.push(idUsuario);
+            paramCount++;
+        }
+        if (idStatus !== undefined) {
+            updateFields.idStatus = `$${paramCount}`;
+            values.push(idStatus);
+            paramCount++;
+        }
+        if (dataInicio) {
+            updateFields.dataInicio = `$${paramCount}`;
+            values.push(dataInicio);
+            paramCount++;
+        }
+        if (dataFim !== undefined) {
+            updateFields.dataFim = `$${paramCount}`;
+            values.push(dataFim);
+            paramCount++;
+        }
 
         if (Object.keys(updateFields).length === 0) {
             return res.status(400).json({ message: 'Nenhum campo válido para atualização fornecido' });
         }
 
-        let query = 'UPDATE Contrato SET ';
-        const setClauses = [];
-        const values = [];
+        const setClauses = Object.entries(updateFields)
+            .map(([key, value]) => `${key} = ${value}`)
+            .join(', ');
 
-        for (const [key, value] of Object.entries(updateFields)) {
-            setClauses.push(`${key} = ?`);
-            values.push(value);
-        }
-
-        query += setClauses.join(', ');
-        query += ' WHERE idContrato = ?';
         values.push(idContrato);
 
-        await sql.query(query, values);
+        const query = `
+            UPDATE Contrato 
+            SET ${setClauses} 
+            WHERE idContrato = $${paramCount} 
+            RETURNING *
+        `;
 
-        // Buscar contrato atualizado
-        const [updatedContrato] = await sql.query('SELECT * FROM Contrato WHERE idContrato = ?', [idContrato]);
+        const result = await client.query(query, values);
 
         res.status(200).json({
             message: 'Contrato atualizado com sucesso',
-            data: updatedContrato[0]
+            data: result.rows[0]
         });
 
     } catch (error) {
@@ -240,34 +274,38 @@ async function atualizarContrato(req, res) {
         });
         console.error('Erro ao atualizar contrato:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function excluirContrato(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pgconnection();
         const { idContrato } = req.params;
 
         // Verificar se o contrato existe
-        const [contrato] = await sql.query('SELECT * FROM Contrato WHERE idContrato = ?', [idContrato]);
-        if (contrato.length === 0) {
+        const contratoResult = await client.query(
+            'SELECT * FROM Contrato WHERE idContrato = $1', 
+            [idContrato]
+        );
+        if (contratoResult.rows.length === 0) {
             return res.status(404).json({ message: 'Contrato não encontrado' });
         }
 
-        await sql.query('DELETE FROM Contrato WHERE idContrato = ?', [idContrato]);
+        await client.query('DELETE FROM Contrato WHERE idContrato = $1', [idContrato]);
 
         res.status(200).json({
             message: 'Contrato excluído com sucesso',
-            data: contrato[0]
+            data: contratoResult.rows[0]
         });
 
     } catch (error) {
-        if (error.code === 'ER_ROW_IS_REFERENCED_2') {
+        // PostgreSQL error code for foreign key violation
+        if (error.code === '23503') {
             return res.status(400).json({
                 message: 'Não é possível excluir o contrato pois está sendo utilizado em outros registros'
             });
@@ -279,8 +317,8 @@ async function excluirContrato(req, res) {
         });
         console.error('Erro ao excluir contrato:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }

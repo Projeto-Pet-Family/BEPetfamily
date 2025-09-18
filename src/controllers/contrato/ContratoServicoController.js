@@ -1,11 +1,11 @@
-const sqlconnection = require('../../connections/SQLConnections.js');
+const pgconnection = require('../../connections/SQLConnections.js');
 
 async function lerContratosServico(req, res) {
-    let sql;
+    let client;
     try {
-        sql = await sqlconnection();
-        const [result] = await sql.query('SELECT * FROM ContratoServico');
-        res.status(200).json(result);
+        client = await pgconnection();
+        const result = await client.query('SELECT * FROM "ContratoServico"');
+        res.status(200).json(result.rows);
     } catch (error) {
         console.error('Erro ao ler contratos serviços:', error);
         res.status(500).json({
@@ -13,22 +13,25 @@ async function lerContratosServico(req, res) {
             error: error.message
         });
     } finally {
-        if (sql) await sql.end();
+        if (client) await client.end();
     }
 }
 
 async function buscarContratoServicoPorId(req, res) {
-    let sql;
+    let client;
     try {
-        sql = await sqlconnection();
+        client = await pgconnection();
         const { idContratoServico } = req.params;
-        const [result] = await sql.query('SELECT * FROM ContratoServico WHERE idContratoServico = ?', [idContratoServico]);
+        const result = await client.query(
+            'SELECT * FROM "ContratoServico" WHERE "idContratoServico" = $1', 
+            [idContratoServico]
+        );
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Contrato serviço não encontrado' });
         }
 
-        res.status(200).json(result[0]);
+        res.status(200).json(result.rows[0]);
     } catch (error) {
         console.error('Erro ao buscar contrato serviço:', error);
         res.status(500).json({
@@ -36,14 +39,14 @@ async function buscarContratoServicoPorId(req, res) {
             error: error.message
         });
     } finally {
-        if (sql) await sql.end();
+        if (client) await client.end();
     }
 }
 
 async function inserirContratoServico(req, res) {
-    let sql;
+    let client;
     try {
-        sql = await sqlconnection();
+        client = await pgconnection();
         const { idContrato, idServico } = req.body;
 
         // Validação dos dados
@@ -52,21 +55,27 @@ async function inserirContratoServico(req, res) {
         }
 
         // Verifica se os IDs existem nas tabelas relacionadas
-        const [contratoExists] = await sql.query('SELECT 1 FROM Contrato WHERE idContrato = ?', [idContrato]);
-        const [servicoExists] = await sql.query('SELECT 1 FROM Servico WHERE idServico = ?', [idServico]);
+        const contratoExists = await client.query(
+            'SELECT 1 FROM "Contrato" WHERE "idContrato" = $1', 
+            [idContrato]
+        );
+        const servicoExists = await client.query(
+            'SELECT 1 FROM "Servico" WHERE "idServico" = $1', 
+            [idServico]
+        );
 
-        if (contratoExists.length === 0 || servicoExists.length === 0) {
+        if (contratoExists.rows.length === 0 || servicoExists.rows.length === 0) {
             return res.status(400).json({ message: 'Contrato ou Serviço não encontrado' });
         }
 
-        const [result] = await sql.query(
-            'INSERT INTO ContratoServico (idContrato, idServico) VALUES (?, ?)',
+        const result = await client.query(
+            'INSERT INTO "ContratoServico" ("idContrato", "idServico") VALUES ($1, $2) RETURNING "idContratoServico"',
             [idContrato, idServico]
         );
 
         res.status(201).json({
             message: 'Contrato serviço criado com sucesso!',
-            idContratoServico: result.insertId,
+            idContratoServico: result.rows[0].idContratoServico,
             idContrato,
             idServico
         });
@@ -77,14 +86,14 @@ async function inserirContratoServico(req, res) {
             error: error.message
         });
     } finally {
-        if (sql) await sql.end();
+        if (client) await client.end();
     }
 }
 
 async function atualizarContratoServico(req, res) {
-    let sql;
+    let client;
     try {
-        sql = await sqlconnection();
+        client = await pgconnection();
         const { idContratoServico } = req.params;
         const { idContrato, idServico } = req.body;
 
@@ -94,21 +103,30 @@ async function atualizarContratoServico(req, res) {
         }
 
         // Verifica se o registro existe
-        const [existing] = await sql.query('SELECT 1 FROM ContratoServico WHERE idContratoServico = ?', [idContratoServico]);
-        if (existing.length === 0) {
+        const existing = await client.query(
+            'SELECT 1 FROM "ContratoServico" WHERE "idContratoServico" = $1', 
+            [idContratoServico]
+        );
+        if (existing.rows.length === 0) {
             return res.status(404).json({ message: 'Contrato serviço não encontrado' });
         }
 
         // Verifica se os novos IDs existem
-        const [contratoExists] = await sql.query('SELECT 1 FROM Contrato WHERE idContrato = ?', [idContrato]);
-        const [servicoExists] = await sql.query('SELECT 1 FROM Servico WHERE idServico = ?', [idServico]);
+        const contratoExists = await client.query(
+            'SELECT 1 FROM "Contrato" WHERE "idContrato" = $1', 
+            [idContrato]
+        );
+        const servicoExists = await client.query(
+            'SELECT 1 FROM "Servico" WHERE "idServico" = $1', 
+            [idServico]
+        );
 
-        if (contratoExists.length === 0 || servicoExists.length === 0) {
+        if (contratoExists.rows.length === 0 || servicoExists.rows.length === 0) {
             return res.status(400).json({ message: 'Contrato ou Serviço não encontrado' });
         }
 
-        await sql.query(
-            'UPDATE ContratoServico SET idContrato = ?, idServico = ? WHERE idContratoServico = ?',
+        await client.query(
+            'UPDATE "ContratoServico" SET "idContrato" = $1, "idServico" = $2 WHERE "idContratoServico" = $3',
             [idContrato, idServico, idContratoServico]
         );
 
@@ -125,23 +143,29 @@ async function atualizarContratoServico(req, res) {
             error: error.message
         });
     } finally {
-        if (sql) await sql.end();
+        if (client) await client.end();
     }
 }
 
 async function excluirContratoServico(req, res) {
-    let sql;
+    let client;
     try {
-        sql = await sqlconnection();
+        client = await pgconnection();
         const { idContratoServico } = req.params;
 
         // Verifica se o registro existe
-        const [existing] = await sql.query('SELECT 1 FROM ContratoServico WHERE idContratoServico = ?', [idContratoServico]);
-        if (existing.length === 0) {
+        const existing = await client.query(
+            'SELECT 1 FROM "ContratoServico" WHERE "idContratoServico" = $1', 
+            [idContratoServico]
+        );
+        if (existing.rows.length === 0) {
             return res.status(404).json({ message: 'Contrato serviço não encontrado' });
         }
 
-        await sql.query('DELETE FROM ContratoServico WHERE idContratoServico = ?', [idContratoServico]);
+        await client.query(
+            'DELETE FROM "ContratoServico" WHERE "idContratoServico" = $1', 
+            [idContratoServico]
+        );
 
         res.status(200).json({
             message: 'Contrato serviço excluído com sucesso!',
@@ -154,7 +178,7 @@ async function excluirContratoServico(req, res) {
             error: error.message
         });
     } finally {
-        if (sql) await sql.end();
+        if (client) await client.end();
     }
 }
 

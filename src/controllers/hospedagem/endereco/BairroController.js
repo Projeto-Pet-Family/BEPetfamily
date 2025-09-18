@@ -1,10 +1,10 @@
-const sqlconnection = require('../../../connections/SQLConnections.js');
+const pool = require('../../../connections/SQLConnections.js');
 
 async function lerBairros(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         
         // Adiciona filtro por cidade se fornecido
         const { cidadeId } = req.query;
@@ -17,14 +17,14 @@ async function lerBairros(req, res) {
         const params = [];
         
         if (cidadeId) {
-            query += ' WHERE b.idCidade = ?';
+            query += ' WHERE b.idCidade = $1';
             params.push(cidadeId);
         }
         
         query += ' ORDER BY b.nome';
         
-        const [result] = await sql.query(query, params);
-        res.status(200).json(result);
+        const result = await client.query(query, params);
+        res.status(200).json(result.rows);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao listar bairros',
@@ -32,32 +32,32 @@ async function lerBairros(req, res) {
         });
         console.error('Erro ao listar bairros:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            client.release();
         }
     }
 }
 
 async function buscarBairroPorId(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idBairro } = req.params;
         
-        const [result] = await sql.query(`
+        const result = await client.query(`
             SELECT b.*, c.nome as cidade, e.nome as estado, e.sigla 
             FROM Bairro b 
             JOIN Cidade c ON b.idCidade = c.idCidade
             JOIN Estado e ON c.idEstado = e.idEstado
-            WHERE b.idBairro = ?
+            WHERE b.idBairro = $1
         `, [idBairro]);
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Bairro não encontrado' });
         }
 
-        res.status(200).json(result[0]);
+        res.status(200).json(result.rows[0]);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao buscar bairro',
@@ -65,17 +65,17 @@ async function buscarBairroPorId(req, res) {
         });
         console.error('Erro ao buscar bairro:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            client.release();
         }
     }
 }
 
 async function criarBairro(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
 
         const { 
             nome,
@@ -90,36 +90,36 @@ async function criarBairro(req, res) {
         }
 
         // Verificar se a cidade existe
-        const [cidade] = await sql.query('SELECT 1 FROM Cidade WHERE idCidade = ?', [idCidade]);
-        if (cidade.length === 0) {
+        const cidadeResult = await client.query('SELECT 1 FROM Cidade WHERE idCidade = $1', [idCidade]);
+        if (cidadeResult.rows.length === 0) {
             return res.status(400).json({
                 message: 'Cidade não encontrada'
             });
         }
 
-        // Inserir no banco de dados
-        const [result] = await sql.query(
-            'INSERT INTO Bairro (nome, idCidade) VALUES (?, ?)',
+        // Inserir no banco de dados com RETURNING
+        const result = await client.query(
+            'INSERT INTO Bairro (nome, idCidade) VALUES ($1, $2) RETURNING *',
             [nome, idCidade]
         );
 
         // Buscar os dados completos do bairro criado
-        const [novoBairro] = await sql.query(`
+        const bairroCompleto = await client.query(`
             SELECT b.*, c.nome as cidade, e.nome as estado, e.sigla 
             FROM Bairro b 
             JOIN Cidade c ON b.idCidade = c.idCidade
             JOIN Estado e ON c.idEstado = e.idEstado
-            WHERE b.idBairro = ?
-        `, [result.insertId]);
+            WHERE b.idBairro = $1
+        `, [result.rows[0].idbairro]);
 
         res.status(201).json({
             message: 'Bairro criado com sucesso',
-            data: novoBairro[0]
+            data: bairroCompleto.rows[0]
         });
 
     } catch (error) {
-        // Verificar se é erro de duplicação (bairro já existe na cidade)
-        if (error.code === 'ER_DUP_ENTRY') {
+        // Verificar se é erro de duplicação (bairro já existe na cidade) - PostgreSQL: 23505
+        if (error.code === '23505') {
             return res.status(409).json({
                 message: 'Já existe um bairro com este nome na cidade selecionada'
             });
@@ -131,17 +131,17 @@ async function criarBairro(req, res) {
         });
         console.error('Erro ao criar bairro:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            client.release();
         }
     }
 }
 
 async function atualizarBairro(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idBairro } = req.params;
 
         const {
@@ -150,15 +150,15 @@ async function atualizarBairro(req, res) {
         } = req.body;
 
         // Verificar se o bairro existe
-        const [bairro] = await sql.query('SELECT * FROM Bairro WHERE idBairro = ?', [idBairro]);
-        if (bairro.length === 0) {
+        const bairroResult = await client.query('SELECT * FROM Bairro WHERE idBairro = $1', [idBairro]);
+        if (bairroResult.rows.length === 0) {
             return res.status(404).json({ message: 'Bairro não encontrado' });
         }
 
         // Verificar se a nova cidade existe, se for fornecida
         if (idCidade) {
-            const [cidade] = await sql.query('SELECT 1 FROM Cidade WHERE idCidade = ?', [idCidade]);
-            if (cidade.length === 0) {
+            const cidadeResult = await client.query('SELECT 1 FROM Cidade WHERE idCidade = $1', [idCidade]);
+            if (cidadeResult.rows.length === 0) {
                 return res.status(400).json({
                     message: 'Cidade não encontrada'
                 });
@@ -177,35 +177,37 @@ async function atualizarBairro(req, res) {
         let query = 'UPDATE Bairro SET ';
         const setClauses = [];
         const values = [];
+        let paramCount = 1;
         
         for (const [key, value] of Object.entries(updateFields)) {
-            setClauses.push(`${key} = ?`);
+            setClauses.push(`${key} = $${paramCount}`);
             values.push(value);
+            paramCount++;
         }
         
         query += setClauses.join(', ');
-        query += ' WHERE idBairro = ?';
+        query += ` WHERE idBairro = $${paramCount} RETURNING *`;
         values.push(idBairro);
 
-        await sql.query(query, values);
+        const result = await client.query(query, values);
 
-        // Buscar o bairro atualizado
-        const [updatedBairro] = await sql.query(`
+        // Buscar o bairro atualizado com joins
+        const bairroCompleto = await client.query(`
             SELECT b.*, c.nome as cidade, e.nome as estado, e.sigla 
             FROM Bairro b 
             JOIN Cidade c ON b.idCidade = c.idCidade
             JOIN Estado e ON c.idEstado = e.idEstado
-            WHERE b.idBairro = ?
+            WHERE b.idBairro = $1
         `, [idBairro]);
 
         res.status(200).json({
             message: 'Bairro atualizado com sucesso',
-            data: updatedBairro[0]
+            data: bairroCompleto.rows[0]
         });
 
     } catch (error) {
-        // Verificar se é erro de duplicação (bairro já existe na cidade)
-        if (error.code === 'ER_DUP_ENTRY') {
+        // Verificar se é erro de duplicação (bairro já existe na cidade) - PostgreSQL: 23505
+        if (error.code === '23505') {
             return res.status(409).json({
                 message: 'Já existe um bairro com este nome na cidade selecionada'
             });
@@ -217,42 +219,45 @@ async function atualizarBairro(req, res) {
         });
         console.error('Erro ao atualizar bairro:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            client.release();
         }
     }
 }
 
 async function excluirBairro(req, res) {
-    let sql;
+    let client;
     
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idBairro } = req.params;
 
         // Verificar se o bairro existe
-        const [bairro] = await sql.query(`
+        const bairroResult = await client.query(`
             SELECT b.*, c.nome as cidade, e.nome as estado, e.sigla 
             FROM Bairro b 
             JOIN Cidade c ON b.idCidade = c.idCidade
             JOIN Estado e ON c.idEstado = e.idEstado
-            WHERE b.idBairro = ?
+            WHERE b.idBairro = $1
         `, [idBairro]);
         
-        if (bairro.length === 0) {
+        if (bairroResult.rows.length === 0) {
             return res.status(404).json({ message: 'Bairro não encontrado' });
         }
 
-        await sql.query('DELETE FROM Bairro WHERE idBairro = ?', [idBairro]);
+        const deleteResult = await client.query(
+            'DELETE FROM Bairro WHERE idBairro = $1 RETURNING *',
+            [idBairro]
+        );
 
         res.status(200).json({
             message: 'Bairro excluído com sucesso',
-            data: bairro[0]
+            data: bairroResult.rows[0]
         });
 
     } catch (error) {
-        // Verificar se o erro é devido a uma restrição de chave estrangeira
-        if (error.code === 'ER_ROW_IS_REFERENCED_2') {
+        // Verificar se o erro é devido a uma restrição de chave estrangeira - PostgreSQL: 23503
+        if (error.code === '23503') {
             return res.status(400).json({
                 message: 'Não é possível excluir o bairro pois está sendo utilizado em logradouros'
             });
@@ -264,8 +269,8 @@ async function excluirBairro(req, res) {
         });
         console.error('Erro ao excluir bairro:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            client.release();
         }
     }
 }

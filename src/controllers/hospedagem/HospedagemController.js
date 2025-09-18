@@ -1,36 +1,36 @@
 const sqlconnection = require('../../connections/SQLConnections.js');
 
 async function lerHospedagens(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await sqlconnection();
         
         const query = `
             SELECT 
-                h.idHospedagem,
+                h."idHospedagem",
                 h.nome,
-                e.idEndereco,
+                e."idEndereco",
                 e.numero,
                 e.complemento,
-                cep.codigo as CEP,
+                cep.codigo as "CEP",
                 log.nome as logradouro,
                 b.nome as bairro,
                 cid.nome as cidade,
                 est.nome as estado,
                 est.sigla
             FROM Hospedagem h
-            JOIN Endereco e ON h.idEndereco = e.idEndereco
-            JOIN CEP cep ON e.idCEP = cep.idCEP
-            JOIN Logradouro log ON e.idLogradouro = log.idLogradouro
-            JOIN Bairro b ON log.idBairro = b.idBairro
-            JOIN Cidade cid ON b.idCidade = cid.idCidade
-            JOIN Estado est ON cid.idEstado = est.idEstado
+            JOIN Endereco e ON h."idEndereco" = e."idEndereco"
+            JOIN CEP cep ON e."idCEP" = cep."idCEP"
+            JOIN Logradouro log ON e."idLogradouro" = log."idLogradouro"
+            JOIN Bairro b ON log."idBairro" = b."idBairro"
+            JOIN Cidade cid ON b."idCidade" = cid."idCidade"
+            JOIN Estado est ON cid."idEstado" = est."idEstado"
             ORDER BY h.nome
         `;
         
-        const [result] = await sql.query(query);
-        res.status(200).json(result);
+        const result = await client.query(query);
+        res.status(200).json(result.rows);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao listar hospedagens',
@@ -38,54 +38,54 @@ async function lerHospedagens(req, res) {
         });
         console.error('Erro ao listar hospedagens:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function buscarHospedagemPorId(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await sqlconnection();
         const { idHospedagem } = req.params;
         
         const query = `
             SELECT 
-                h.idHospedagem,
+                h."idHospedagem",
                 h.nome,
-                e.idEndereco,
+                e."idEndereco",
                 e.numero,
                 e.complemento,
-                cep.codigo as CEP,
-                cep.idCEP,
+                cep.codigo as "CEP",
+                cep."idCEP",
                 log.nome as logradouro,
-                log.idLogradouro,
+                log."idLogradouro",
                 b.nome as bairro,
-                b.idBairro,
+                b."idBairro",
                 cid.nome as cidade,
-                cid.idCidade,
+                cid."idCidade",
                 est.nome as estado,
                 est.sigla,
-                est.idEstado
+                est."idEstado"
             FROM Hospedagem h
-            JOIN Endereco e ON h.idEndereco = e.idEndereco
-            JOIN CEP cep ON e.idCEP = cep.idCEP
-            JOIN Logradouro log ON e.idLogradouro = log.idLogradouro
-            JOIN Bairro b ON log.idBairro = b.idBairro
-            JOIN Cidade cid ON b.idCidade = cid.idCidade
-            JOIN Estado est ON cid.idEstado = est.idEstado
-            WHERE h.idHospedagem = ?
+            JOIN Endereco e ON h."idEndereco" = e."idEndereco"
+            JOIN CEP cep ON e."idCEP" = cep."idCEP"
+            JOIN Logradouro log ON e."idLogradouro" = log."idLogradouro"
+            JOIN Bairro b ON log."idBairro" = b."idBairro"
+            JOIN Cidade cid ON b."idCidade" = cid."idCidade"
+            JOIN Estado est ON cid."idEstado" = est."idEstado"
+            WHERE h."idHospedagem" = $1
         `;
         
-        const [result] = await sql.query(query, [idHospedagem]);
+        const result = await client.query(query, [idHospedagem]);
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Hospedagem não encontrada' });
         }
 
-        res.status(200).json(result[0]);
+        res.status(200).json(result.rows[0]);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao buscar hospedagem',
@@ -93,17 +93,17 @@ async function buscarHospedagemPorId(req, res) {
         });
         console.error('Erro ao buscar hospedagem:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function criarHospedagem(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await sqlconnection();
 
         const { 
             nome,
@@ -118,51 +118,51 @@ async function criarHospedagem(req, res) {
         }
 
         // Verificar se o endereço existe
-        const [endereco] = await sql.query('SELECT 1 FROM Endereco WHERE idEndereco = ?', [idEndereco]);
-        if (endereco.length === 0) {
+        const endereco = await client.query('SELECT 1 FROM Endereco WHERE "idEndereco" = $1', [idEndereco]);
+        if (endereco.rows.length === 0) {
             return res.status(400).json({
                 message: 'Endereço não encontrado'
             });
         }
 
         // Inserir no banco de dados
-        const [result] = await sql.query(
-            'INSERT INTO Hospedagem (nome, idEndereco) VALUES (?, ?)',
+        const result = await client.query(
+            'INSERT INTO Hospedagem (nome, "idEndereco") VALUES ($1, $2) RETURNING "idHospedagem"',
             [nome, idEndereco]
         );
 
         // Buscar os dados completos da hospedagem criada
-        const [novaHospedagem] = await sql.query(`
+        const novaHospedagem = await client.query(`
             SELECT 
-                h.idHospedagem,
+                h."idHospedagem",
                 h.nome,
-                e.idEndereco,
+                e."idEndereco",
                 e.numero,
                 e.complemento,
-                cep.codigo as CEP,
+                cep.codigo as "CEP",
                 log.nome as logradouro,
                 b.nome as bairro,
                 cid.nome as cidade,
                 est.nome as estado,
                 est.sigla
             FROM Hospedagem h
-            JOIN Endereco e ON h.idEndereco = e.idEndereco
-            JOIN CEP cep ON e.idCEP = cep.idCEP
-            JOIN Logradouro log ON e.idLogradouro = log.idLogradouro
-            JOIN Bairro b ON log.idBairro = b.idBairro
-            JOIN Cidade cid ON b.idCidade = cid.idCidade
-            JOIN Estado est ON cid.idEstado = est.idEstado
-            WHERE h.idHospedagem = ?
-        `, [result.insertId]);
+            JOIN Endereco e ON h."idEndereco" = e."idEndereco"
+            JOIN CEP cep ON e."idCEP" = cep."idCEP"
+            JOIN Logradouro log ON e."idLogradouro" = log."idLogradouro"
+            JOIN Bairro b ON log."idBairro" = b."idBairro"
+            JOIN Cidade cid ON b."idCidade" = cid."idCidade"
+            JOIN Estado est ON cid."idEstado" = est."idEstado"
+            WHERE h."idHospedagem" = $1
+        `, [result.rows[0].idHospedagem]);
 
         res.status(201).json({
             message: 'Hospedagem criada com sucesso',
-            data: novaHospedagem[0]
+            data: novaHospedagem.rows[0]
         });
 
     } catch (error) {
         // Verificar se é erro de duplicação
-        if (error.code === 'ER_DUP_ENTRY') {
+        if (error.code === '23505') { // Código de violação de constraint única no PostgreSQL
             return res.status(409).json({
                 message: 'Já existe uma hospedagem com este nome no mesmo endereço'
             });
@@ -174,17 +174,17 @@ async function criarHospedagem(req, res) {
         });
         console.error('Erro ao criar hospedagem:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function atualizarHospedagem(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await sqlconnection();
         const { idHospedagem } = req.params;
 
         const {
@@ -193,15 +193,15 @@ async function atualizarHospedagem(req, res) {
         } = req.body;
 
         // Verificar se a hospedagem existe
-        const [hospedagem] = await sql.query('SELECT * FROM Hospedagem WHERE idHospedagem = ?', [idHospedagem]);
-        if (hospedagem.length === 0) {
+        const hospedagem = await client.query('SELECT * FROM Hospedagem WHERE "idHospedagem" = $1', [idHospedagem]);
+        if (hospedagem.rows.length === 0) {
             return res.status(404).json({ message: 'Hospedagem não encontrada' });
         }
 
         // Verificar se o novo endereço existe, se for fornecido
         if (idEndereco) {
-            const [endereco] = await sql.query('SELECT 1 FROM Endereco WHERE idEndereco = ?', [idEndereco]);
-            if (endereco.length === 0) {
+            const endereco = await client.query('SELECT 1 FROM Endereco WHERE "idEndereco" = $1', [idEndereco]);
+            if (endereco.rows.length === 0) {
                 return res.status(400).json({
                     message: 'Endereço não encontrado'
                 });
@@ -220,50 +220,53 @@ async function atualizarHospedagem(req, res) {
         let query = 'UPDATE Hospedagem SET ';
         const setClauses = [];
         const values = [];
+        let paramCount = 1;
         
         for (const [key, value] of Object.entries(updateFields)) {
-            setClauses.push(`${key} = ?`);
+            const columnName = key === 'idEndereco' ? '"idEndereco"' : key;
+            setClauses.push(`${columnName} = $${paramCount}`);
             values.push(value);
+            paramCount++;
         }
         
         query += setClauses.join(', ');
-        query += ' WHERE idHospedagem = ?';
+        query += ` WHERE "idHospedagem" = $${paramCount}`;
         values.push(idHospedagem);
 
-        await sql.query(query, values);
+        await client.query(query, values);
 
         // Buscar a hospedagem atualizada
-        const [updatedHospedagem] = await sql.query(`
+        const updatedHospedagem = await client.query(`
             SELECT 
-                h.idHospedagem,
+                h."idHospedagem",
                 h.nome,
-                e.idEndereco,
+                e."idEndereco",
                 e.numero,
                 e.complemento,
-                cep.codigo as CEP,
+                cep.codigo as "CEP",
                 log.nome as logradouro,
                 b.nome as bairro,
                 cid.nome as cidade,
                 est.nome as estado,
                 est.sigla
             FROM Hospedagem h
-            JOIN Endereco e ON h.idEndereco = e.idEndereco
-            JOIN CEP cep ON e.idCEP = cep.idCEP
-            JOIN Logradouro log ON e.idLogradouro = log.idLogradouro
-            JOIN Bairro b ON log.idBairro = b.idBairro
-            JOIN Cidade cid ON b.idCidade = cid.idCidade
-            JOIN Estado est ON cid.idEstado = est.idEstado
-            WHERE h.idHospedagem = ?
+            JOIN Endereco e ON h."idEndereco" = e."idEndereco"
+            JOIN CEP cep ON e."idCEP" = cep."idCEP"
+            JOIN Logradouro log ON e."idLogradouro" = log."idLogradouro"
+            JOIN Bairro b ON log."idBairro" = b."idBairro"
+            JOIN Cidade cid ON b."idCidade" = cid."idCidade"
+            JOIN Estado est ON cid."idEstado" = est."idEstado"
+            WHERE h."idHospedagem" = $1
         `, [idHospedagem]);
 
         res.status(200).json({
             message: 'Hospedagem atualizada com sucesso',
-            data: updatedHospedagem[0]
+            data: updatedHospedagem.rows[0]
         });
 
     } catch (error) {
         // Verificar se é erro de duplicação
-        if (error.code === 'ER_DUP_ENTRY') {
+        if (error.code === '23505') { // Código de violação de constraint única no PostgreSQL
             return res.status(409).json({
                 message: 'Já existe uma hospedagem com este nome no mesmo endereço'
             });
@@ -275,52 +278,52 @@ async function atualizarHospedagem(req, res) {
         });
         console.error('Erro ao atualizar hospedagem:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function excluirHospedagem(req, res) {
-    let sql;
+    let client;
     
     try {
-        sql = await sqlconnection();
+        client = await sqlconnection();
         const { idHospedagem } = req.params;
 
         // Verificar se a hospedagem existe
-        const [hospedagem] = await sql.query(`
+        const hospedagem = await client.query(`
             SELECT 
-                h.idHospedagem,
+                h."idHospedagem",
                 h.nome,
-                e.idEndereco,
+                e."idEndereco",
                 e.numero,
                 e.complemento,
-                cep.codigo as CEP,
+                cep.codigo as "CEP",
                 log.nome as logradouro,
                 b.nome as bairro,
                 cid.nome as cidade,
                 est.nome as estado,
                 est.sigla
             FROM Hospedagem h
-            JOIN Endereco e ON h.idEndereco = e.idEndereco
-            JOIN CEP cep ON e.idCEP = cep.idCEP
-            JOIN Logradouro log ON e.idLogradouro = log.idLogradouro
-            JOIN Bairro b ON log.idBairro = b.idBairro
-            JOIN Cidade cid ON b.idCidade = cid.idCidade
-            JOIN Estado est ON cid.idEstado = est.idEstado
-            WHERE h.idHospedagem = ?
+            JOIN Endereco e ON h."idEndereco" = e."idEndereco"
+            JOIN CEP cep ON e."idCEP" = cep."idCEP"
+            JOIN Logradouro log ON e."idLogradouro" = log."idLogradouro"
+            JOIN Bairro b ON log."idBairro" = b."idBairro"
+            JOIN Cidade cid ON b."idCidade" = cid."idCidade"
+            JOIN Estado est ON cid."idEstado" = est."idEstado"
+            WHERE h."idHospedagem" = $1
         `, [idHospedagem]);
         
-        if (hospedagem.length === 0) {
+        if (hospedagem.rows.length === 0) {
             return res.status(404).json({ message: 'Hospedagem não encontrada' });
         }
 
-        await sql.query('DELETE FROM Hospedagem WHERE idHospedagem = ?', [idHospedagem]);
+        await client.query('DELETE FROM Hospedagem WHERE "idHospedagem" = $1', [idHospedagem]);
 
         res.status(200).json({
             message: 'Hospedagem excluída com sucesso',
-            data: hospedagem[0]
+            data: hospedagem.rows[0]
         });
 
     } catch (error) {
@@ -330,8 +333,8 @@ async function excluirHospedagem(req, res) {
         });
         console.error('Erro ao excluir hospedagem:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }

@@ -1,17 +1,20 @@
-const mysql = require('mysql2/promise')
+const { Pool } = require('pg');
 
-async function SqlConnection(){
-    const connection = await mysql.createConnection({
-        host:'localhost',
-        user:'root',
-        password:'',
-        database:'petfamily'
-    })
+const connectionString = 'postgresql://neondb_owner:npg_FdYvOjbx51CX@ep-lingering-wave-ae8v6e5a-pooler.c-2.us-east-2.aws.neon.tech/petfamily?sslmode=require&channel_binding=require';
 
-    console.log('Conectado ao MYSQL!') 
+const pool = new Pool({
+  connectionString: connectionString,
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000,
+});
 
-    return connection
+pool.on('connect', () => {
+  console.log('Conectado ao PostgreSQL Neon');
+});
 
-}
+pool.on('error', (err) => {
+  console.error('Erro na conexão com PostgreSQL:', err);
+});
 
-module.exports = SqlConnection
+module.exports = pool;

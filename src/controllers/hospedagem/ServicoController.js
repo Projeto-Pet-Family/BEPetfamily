@@ -1,9 +1,9 @@
-const sqlconnection = require('../../connections/SQLConnections.js');
+const pgconnection = require('../../connections/SQLConnections.js');
 
 async function listarServicosPorHospedagem(req, res) {
-    let sql;
+    let client;
     try {
-        sql = await sqlconnection();
+        client = await pgconnection();
         const { idHospedagem } = req.params;
 
         const query = `
@@ -12,12 +12,12 @@ async function listarServicosPorHospedagem(req, res) {
                 s.descricao,
                 s.preco
             FROM Servico s
-            WHERE s.idHospedagem = ?
+            WHERE s.idHospedagem = $1
             ORDER BY s.descricao
         `;
 
-        const [result] = await sql.query(query, [idHospedagem]);
-        res.status(200).json(result);
+        const result = await client.query(query, [idHospedagem]);
+        res.status(200).json(result.rows);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao listar serviços da hospedagem',
@@ -25,16 +25,16 @@ async function listarServicosPorHospedagem(req, res) {
         });
         console.error('Erro ao listar serviços:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function adicionarServicoAHospedagem(req, res) {
-    let sql;
+    let client;
     try {
-        sql = await sqlconnection();
+        client = await pgconnection();
         const { idHospedagem } = req.params;
         const { descricao, preco } = req.body;
 
@@ -52,30 +52,26 @@ async function adicionarServicoAHospedagem(req, res) {
         }
 
         // Verificar se a hospedagem existe
-        const [hospedagem] = await sql.query('SELECT 1 FROM Hospedagem WHERE idHospedagem = ?', [idHospedagem]);
-        if (hospedagem.length === 0) {
+        const hospedagemResult = await client.query(
+            'SELECT 1 FROM Hospedagem WHERE idHospedagem = $1', 
+            [idHospedagem]
+        );
+        
+        if (hospedagemResult.rows.length === 0) {
             return res.status(404).json({ message: 'Hospedagem não encontrada' });
         }
 
-        // Inserir o novo serviço
-        const [result] = await sql.query(
-            'INSERT INTO Servico (idHospedagem, descricao, preco) VALUES (?, ?, ?)',
+        // Inserir o novo serviço e retornar os dados
+        const result = await client.query(
+            `INSERT INTO Servico (idHospedagem, descricao, preco) 
+             VALUES ($1, $2, $3) 
+             RETURNING idServico, descricao, preco`,
             [idHospedagem, descricao, preco]
         );
 
-        // Buscar o registro criado
-        const [novoServico] = await sql.query(`
-            SELECT 
-                idServico,
-                descricao,
-                preco
-            FROM Servico
-            WHERE idServico = ?
-        `, [result.insertId]);
-
         res.status(201).json({
             message: 'Serviço criado com sucesso',
-            data: novoServico[0]
+            data: result.rows[0]
         });
 
     } catch (error) {
@@ -85,16 +81,16 @@ async function adicionarServicoAHospedagem(req, res) {
         });
         console.error('Erro ao criar serviço:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function atualizarServico(req, res) {
-    let sql;
+    let client;
     try {
-        sql = await sqlconnection();
+        client = await pgconnection();
         const { idServico } = req.params;
         const { descricao, preco } = req.body;
 
@@ -112,30 +108,42 @@ async function atualizarServico(req, res) {
         }
 
         // Verificar se o serviço existe
-        const [servico] = await sql.query('SELECT 1 FROM Servico WHERE idServico = ?', [idServico]);
-        if (servico.length === 0) {
+        const servicoResult = await client.query(
+            'SELECT 1 FROM Servico WHERE idServico = $1', 
+            [idServico]
+        );
+        
+        if (servicoResult.rows.length === 0) {
             return res.status(404).json({ message: 'Serviço não encontrado' });
         }
 
-        // Atualizar o serviço
-        await sql.query(
-            'UPDATE Servico SET descricao = COALESCE(?, descricao), preco = COALESCE(?, preco) WHERE idServico = ?',
-            [descricao, preco, idServico]
-        );
+        // Construir a query dinamicamente
+        let query = 'UPDATE Servico SET ';
+        const params = [];
+        let paramCount = 1;
 
-        // Buscar o registro atualizado
-        const [servicoAtualizado] = await sql.query(`
-            SELECT 
-                idServico,
-                descricao,
-                preco
-            FROM Servico
-            WHERE idServico = ?
-        `, [idServico]);
+        if (descricao) {
+            query += `descricao = $${paramCount}`;
+            params.push(descricao);
+            paramCount++;
+        }
+
+        if (preco !== undefined) {
+            if (paramCount > 1) query += ', ';
+            query += `preco = $${paramCount}`;
+            params.push(preco);
+            paramCount++;
+        }
+
+        query += ` WHERE idServico = $${paramCount} RETURNING idServico, descricao, preco`;
+        params.push(idServico);
+
+        // Executar a atualização
+        const result = await client.query(query, params);
 
         res.status(200).json({
             message: 'Serviço atualizado com sucesso',
-            data: servicoAtualizado[0]
+            data: result.rows[0]
         });
 
     } catch (error) {
@@ -145,26 +153,30 @@ async function atualizarServico(req, res) {
         });
         console.error('Erro ao atualizar serviço:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function removerServico(req, res) {
-    let sql;
+    let client;
     try {
-        sql = await sqlconnection();
+        client = await pgconnection();
         const { idServico } = req.params;
 
         // Verificar se o serviço existe
-        const [servico] = await sql.query('SELECT 1 FROM Servico WHERE idServico = ?', [idServico]);
-        if (servico.length === 0) {
+        const servicoResult = await client.query(
+            'SELECT 1 FROM Servico WHERE idServico = $1', 
+            [idServico]
+        );
+        
+        if (servicoResult.rows.length === 0) {
             return res.status(404).json({ message: 'Serviço não encontrado' });
         }
 
         // Remover o serviço
-        await sql.query('DELETE FROM Servico WHERE idServico = ?', [idServico]);
+        await client.query('DELETE FROM Servico WHERE idServico = $1', [idServico]);
 
         res.status(200).json({
             message: 'Serviço removido com sucesso'
@@ -177,8 +189,8 @@ async function removerServico(req, res) {
         });
         console.error('Erro ao remover serviço:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }

@@ -1,10 +1,10 @@
-const sqlconnection = require('../../../connections/SQLConnections.js');
+const pool = require('../../../connections/SQLConnections.js');
 
 async function lerEnderecos(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         
         // Adiciona filtros se fornecidos
         const { logradouroId, cepId } = req.query;
@@ -26,25 +26,28 @@ async function lerEnderecos(req, res) {
         `;
         const params = [];
         let whereAdded = false;
+        let paramCount = 1;
         
         if (logradouroId) {
             query += whereAdded ? ' AND' : ' WHERE';
-            query += ' e.idLogradouro = ?';
+            query += ` e."idLogradouro" = $${paramCount}`;
             params.push(logradouroId);
+            paramCount++;
             whereAdded = true;
         }
         
         if (cepId) {
             query += whereAdded ? ' AND' : ' WHERE';
-            query += ' e.idCEP = ?';
+            query += ` e."idCEP" = $${paramCount}`;
             params.push(cepId);
+            paramCount++;
             whereAdded = true;
         }
         
         query += ' ORDER BY lo.nome, e.numero';
         
-        const [result] = await sql.query(query, params);
-        res.status(200).json(result);
+        const result = await client.query(query, params);
+        res.status(200).json(result.rows);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao listar endereços',
@@ -52,20 +55,20 @@ async function lerEnderecos(req, res) {
         });
         console.error('Erro ao listar endereços:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function buscarEnderecoPorId(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idEndereco } = req.params;
         
-        const [result] = await sql.query(`
+        const result = await client.query(`
             SELECT 
                 e.*, 
                 c.codigo as cep, 
@@ -75,19 +78,19 @@ async function buscarEnderecoPorId(req, res) {
                 es.nome as estado, 
                 es.sigla
             FROM Endereco e
-            JOIN CEP c ON e.idCEP = c.idCEP
-            JOIN Logradouro lo ON e.idLogradouro = lo.idLogradouro
-            JOIN Bairro b ON lo.idBairro = b.idBairro
-            JOIN Cidade ci ON b.idCidade = ci.idCidade
-            JOIN Estado es ON ci.idEstado = es.idEstado
-            WHERE e.idEndereco = ?
+            JOIN CEP c ON e."idCEP" = c."idCEP"
+            JOIN Logradouro lo ON e."idLogradouro" = lo."idLogradouro"
+            JOIN Bairro b ON lo."idBairro" = b."idBairro"
+            JOIN Cidade ci ON b."idCidade" = ci."idCidade"
+            JOIN Estado es ON ci."idEstado" = es."idEstado"
+            WHERE e."idEndereco" = $1
         `, [idEndereco]);
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Endereço não encontrado' });
         }
 
-        res.status(200).json(result[0]);
+        res.status(200).json(result.rows[0]);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao buscar endereço',
@@ -95,17 +98,17 @@ async function buscarEnderecoPorId(req, res) {
         });
         console.error('Erro ao buscar endereço:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function criarEndereco(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
 
         const { 
             idLogradouro,
@@ -129,37 +132,39 @@ async function criarEndereco(req, res) {
         }
 
         // Verificar se o logradouro existe
-        const [logradouro] = await sql.query('SELECT 1 FROM Logradouro WHERE idLogradouro = ?', [idLogradouro]);
-        if (logradouro.length === 0) {
+        const logradouro = await client.query('SELECT 1 FROM Logradouro WHERE "idLogradouro" = $1', [idLogradouro]);
+        if (logradouro.rows.length === 0) {
             return res.status(400).json({
                 message: 'Logradouro não encontrado'
             });
         }
 
         // Verificar se o CEP existe
-        const [cep] = await sql.query('SELECT 1 FROM CEP WHERE idCEP = ?', [idCEP]);
-        if (cep.length === 0) {
+        const cep = await client.query('SELECT 1 FROM CEP WHERE "idCEP" = $1', [idCEP]);
+        if (cep.rows.length === 0) {
             return res.status(400).json({
                 message: 'CEP não encontrado'
             });
         }
 
         // Verificar se o CEP pertence ao logradouro
-        const [cepLogradouro] = await sql.query('SELECT idLogradouro FROM CEP WHERE idCEP = ?', [idCEP]);
-        if (cepLogradouro[0].idLogradouro !== idLogradouro) {
+        const cepLogradouro = await client.query('SELECT "idLogradouro" FROM CEP WHERE "idCEP" = $1', [idCEP]);
+        if (cepLogradouro.rows[0].idLogradouro !== idLogradouro) {
             return res.status(400).json({
                 message: 'O CEP não pertence ao logradouro especificado'
             });
         }
 
         // Inserir no banco de dados
-        const [result] = await sql.query(
-            'INSERT INTO Endereco (idLogradouro, numero, complemento, idCEP) VALUES (?, ?, ?, ?)',
+        const result = await client.query(
+            'INSERT INTO Endereco ("idLogradouro", numero, complemento, "idCEP") VALUES ($1, $2, $3, $4) RETURNING "idEndereco"',
             [idLogradouro, numero, complemento || null, idCEP]
         );
 
+        const novoId = result.rows[0].idEndereco;
+
         // Buscar os dados completos do endereço criado
-        const [novoEndereco] = await sql.query(`
+        const novoEndereco = await client.query(`
             SELECT 
                 e.*, 
                 c.codigo as cep, 
@@ -169,22 +174,22 @@ async function criarEndereco(req, res) {
                 es.nome as estado, 
                 es.sigla
             FROM Endereco e
-            JOIN CEP c ON e.idCEP = c.idCEP
-            JOIN Logradouro lo ON e.idLogradouro = lo.idLogradouro
-            JOIN Bairro b ON lo.idBairro = b.idBairro
-            JOIN Cidade ci ON b.idCidade = ci.idCidade
-            JOIN Estado es ON ci.idEstado = es.idEstado
-            WHERE e.idEndereco = ?
-        `, [result.insertId]);
+            JOIN CEP c ON e."idCEP" = c."idCEP"
+            JOIN Logradouro lo ON e."idLogradouro" = lo."idLogradouro"
+            JOIN Bairro b ON lo."idBairro" = b."idBairro"
+            JOIN Cidade ci ON b."idCidade" = ci."idCidade"
+            JOIN Estado es ON ci."idEstado" = es."idEstado"
+            WHERE e."idEndereco" = $1
+        `, [novoId]);
 
         res.status(201).json({
             message: 'Endereço criado com sucesso',
-            data: novoEndereco[0]
+            data: novoEndereco.rows[0]
         });
 
     } catch (error) {
         // Verificar se é erro de duplicação (endereço já existe)
-        if (error.code === 'ER_DUP_ENTRY') {
+        if (error.code === '23505') { // Código de violação de constraint única no PostgreSQL
             return res.status(409).json({
                 message: 'Já existe um endereço com este número no mesmo logradouro e CEP'
             });
@@ -196,17 +201,17 @@ async function criarEndereco(req, res) {
         });
         console.error('Erro ao criar endereço:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function atualizarEndereco(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idEndereco } = req.params;
 
         const {
@@ -217,8 +222,8 @@ async function atualizarEndereco(req, res) {
         } = req.body;
 
         // Verificar se o endereço existe
-        const [endereco] = await sql.query('SELECT * FROM Endereco WHERE idEndereco = ?', [idEndereco]);
-        if (endereco.length === 0) {
+        const endereco = await client.query('SELECT * FROM Endereco WHERE "idEndereco" = $1', [idEndereco]);
+        if (endereco.rows.length === 0) {
             return res.status(404).json({ message: 'Endereço não encontrado' });
         }
 
@@ -231,8 +236,8 @@ async function atualizarEndereco(req, res) {
 
         // Verificar se o novo logradouro existe, se for fornecido
         if (idLogradouro) {
-            const [logradouro] = await sql.query('SELECT 1 FROM Logradouro WHERE idLogradouro = ?', [idLogradouro]);
-            if (logradouro.length === 0) {
+            const logradouro = await client.query('SELECT 1 FROM Logradouro WHERE "idLogradouro" = $1', [idLogradouro]);
+            if (logradouro.rows.length === 0) {
                 return res.status(400).json({
                     message: 'Logradouro não encontrado'
                 });
@@ -241,8 +246,8 @@ async function atualizarEndereco(req, res) {
 
         // Verificar se o novo CEP existe, se for fornecido
         if (idCEP) {
-            const [cep] = await sql.query('SELECT 1 FROM CEP WHERE idCEP = ?', [idCEP]);
-            if (cep.length === 0) {
+            const cep = await client.query('SELECT 1 FROM CEP WHERE "idCEP" = $1', [idCEP]);
+            if (cep.rows.length === 0) {
                 return res.status(400).json({
                     message: 'CEP não encontrado'
                 });
@@ -251,8 +256,8 @@ async function atualizarEndereco(req, res) {
 
         // Verificar se o CEP pertence ao logradouro, se ambos forem fornecidos
         if (idCEP && idLogradouro) {
-            const [cepLogradouro] = await sql.query('SELECT idLogradouro FROM CEP WHERE idCEP = ?', [idCEP]);
-            if (cepLogradouro[0].idLogradouro !== idLogradouro) {
+            const cepLogradouro = await client.query('SELECT "idLogradouro" FROM CEP WHERE "idCEP" = $1', [idCEP]);
+            if (cepLogradouro.rows[0].idLogradouro !== idLogradouro) {
                 return res.status(400).json({
                     message: 'O CEP não pertence ao logradouro especificado'
                 });
@@ -261,32 +266,42 @@ async function atualizarEndereco(req, res) {
 
         // Construir a query dinamicamente
         const updateFields = {};
-        if (idLogradouro) updateFields.idLogradouro = idLogradouro;
-        if (numero !== undefined) updateFields.numero = numero;
-        if (complemento !== undefined) updateFields.complemento = complemento;
-        if (idCEP) updateFields.idCEP = idCEP;
+        const values = [];
+        let paramCount = 1;
+        let setClauses = [];
 
-        if (Object.keys(updateFields).length === 0) {
+        if (idLogradouro) {
+            setClauses.push(`"idLogradouro" = $${paramCount}`);
+            values.push(idLogradouro);
+            paramCount++;
+        }
+        if (numero !== undefined) {
+            setClauses.push(`numero = $${paramCount}`);
+            values.push(numero);
+            paramCount++;
+        }
+        if (complemento !== undefined) {
+            setClauses.push(`complemento = $${paramCount}`);
+            values.push(complemento);
+            paramCount++;
+        }
+        if (idCEP) {
+            setClauses.push(`"idCEP" = $${paramCount}`);
+            values.push(idCEP);
+            paramCount++;
+        }
+
+        if (setClauses.length === 0) {
             return res.status(400).json({ message: 'Nenhum campo válido para atualização fornecido' });
         }
 
-        let query = 'UPDATE Endereco SET ';
-        const setClauses = [];
-        const values = [];
-        
-        for (const [key, value] of Object.entries(updateFields)) {
-            setClauses.push(`${key} = ?`);
-            values.push(value === null ? null : value);
-        }
-        
-        query += setClauses.join(', ');
-        query += ' WHERE idEndereco = ?';
         values.push(idEndereco);
+        const query = `UPDATE Endereco SET ${setClauses.join(', ')} WHERE "idEndereco" = $${paramCount}`;
 
-        await sql.query(query, values);
+        await client.query(query, values);
 
         // Buscar o endereço atualizado
-        const [updatedEndereco] = await sql.query(`
+        const updatedEndereco = await client.query(`
             SELECT 
                 e.*, 
                 c.codigo as cep, 
@@ -296,22 +311,22 @@ async function atualizarEndereco(req, res) {
                 es.nome as estado, 
                 es.sigla
             FROM Endereco e
-            JOIN CEP c ON e.idCEP = c.idCEP
-            JOIN Logradouro lo ON e.idLogradouro = lo.idLogradouro
-            JOIN Bairro b ON lo.idBairro = b.idBairro
-            JOIN Cidade ci ON b.idCidade = ci.idCidade
-            JOIN Estado es ON ci.idEstado = es.idEstado
-            WHERE e.idEndereco = ?
+            JOIN CEP c ON e."idCEP" = c."idCEP"
+            JOIN Logradouro lo ON e."idLogradouro" = lo."idLogradouro"
+            JOIN Bairro b ON lo."idBairro" = b."idBairro"
+            JOIN Cidade ci ON b."idCidade" = ci."idCidade"
+            JOIN Estado es ON ci."idEstado" = es."idEstado"
+            WHERE e."idEndereco" = $1
         `, [idEndereco]);
 
         res.status(200).json({
             message: 'Endereço atualizado com sucesso',
-            data: updatedEndereco[0]
+            data: updatedEndereco.rows[0]
         });
 
     } catch (error) {
         // Verificar se é erro de duplicação (endereço já existe)
-        if (error.code === 'ER_DUP_ENTRY') {
+        if (error.code === '23505') { // Código de violação de constraint única no PostgreSQL
             return res.status(409).json({
                 message: 'Já existe um endereço com este número no mesmo logradouro e CEP'
             });
@@ -323,21 +338,21 @@ async function atualizarEndereco(req, res) {
         });
         console.error('Erro ao atualizar endereço:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function excluirEndereco(req, res) {
-    let sql;
+    let client;
     
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idEndereco } = req.params;
 
         // Verificar se o endereço existe
-        const [endereco] = await sql.query(`
+        const endereco = await client.query(`
             SELECT 
                 e.*, 
                 c.codigo as cep, 
@@ -347,23 +362,23 @@ async function excluirEndereco(req, res) {
                 es.nome as estado, 
                 es.sigla
             FROM Endereco e
-            JOIN CEP c ON e.idCEP = c.idCEP
-            JOIN Logradouro lo ON e.idLogradouro = lo.idLogradouro
-            JOIN Bairro b ON lo.idBairro = b.idBairro
-            JOIN Cidade ci ON b.idCidade = ci.idCidade
-            JOIN Estado es ON ci.idEstado = es.idEstado
-            WHERE e.idEndereco = ?
+            JOIN CEP c ON e."idCEP" = c."idCEP"
+            JOIN Logradouro lo ON e."idLogradouro" = lo."idLogradouro"
+            JOIN Bairro b ON lo."idBairro" = b."idBairro"
+            JOIN Cidade ci ON b."idCidade" = ci."idCidade"
+            JOIN Estado es ON ci."idEstado" = es."idEstado"
+            WHERE e."idEndereco" = $1
         `, [idEndereco]);
         
-        if (endereco.length === 0) {
+        if (endereco.rows.length === 0) {
             return res.status(404).json({ message: 'Endereço não encontrado' });
         }
 
-        await sql.query('DELETE FROM Endereco WHERE idEndereco = ?', [idEndereco]);
+        await client.query('DELETE FROM Endereco WHERE "idEndereco" = $1', [idEndereco]);
 
         res.status(200).json({
             message: 'Endereço excluído com sucesso',
-            data: endereco[0]
+            data: endereco.rows[0]
         });
 
     } catch (error) {
@@ -373,8 +388,8 @@ async function excluirEndereco(req, res) {
         });
         console.error('Erro ao excluir endereço:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }

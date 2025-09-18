@@ -1,10 +1,10 @@
-const sqlconnection = require('../../../connections/SQLConnections.js');
+const pool = require('../../../connections/SQLConnections.js');
 
 async function lerLogradouros(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         
         // Adiciona filtro por bairro se fornecido
         const { bairroId } = req.query;
@@ -18,14 +18,14 @@ async function lerLogradouros(req, res) {
         const params = [];
         
         if (bairroId) {
-            query += ' WHERE l.idBairro = ?';
+            query += ' WHERE l."idBairro" = $1';
             params.push(bairroId);
         }
         
         query += ' ORDER BY l.nome';
         
-        const [result] = await sql.query(query, params);
-        res.status(200).json(result);
+        const result = await client.query(query, params);
+        res.status(200).json(result.rows);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao listar logradouros',
@@ -33,33 +33,33 @@ async function lerLogradouros(req, res) {
         });
         console.error('Erro ao listar logradouros:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function buscarLogradouroPorId(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idLogradouro } = req.params;
         
-        const [result] = await sql.query(`
+        const result = await client.query(`
             SELECT l.*, b.nome as bairro, c.nome as cidade, e.nome as estado, e.sigla 
             FROM Logradouro l 
-            JOIN Bairro b ON l.idBairro = b.idBairro
-            JOIN Cidade c ON b.idCidade = c.idCidade
-            JOIN Estado e ON c.idEstado = e.idEstado
-            WHERE l.idLogradouro = ?
+            JOIN Bairro b ON l."idBairro" = b."idBairro"
+            JOIN Cidade c ON b."idCidade" = c."idCidade"
+            JOIN Estado e ON c."idEstado" = e."idEstado"
+            WHERE l."idLogradouro" = $1
         `, [idLogradouro]);
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Logradouro não encontrado' });
         }
 
-        res.status(200).json(result[0]);
+        res.status(200).json(result.rows[0]);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao buscar logradouro',
@@ -67,17 +67,17 @@ async function buscarLogradouroPorId(req, res) {
         });
         console.error('Erro ao buscar logradouro:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function criarLogradouro(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
 
         const { 
             nome,
@@ -92,37 +92,37 @@ async function criarLogradouro(req, res) {
         }
 
         // Verificar se o bairro existe
-        const [bairro] = await sql.query('SELECT 1 FROM Bairro WHERE idBairro = ?', [idBairro]);
-        if (bairro.length === 0) {
+        const bairro = await client.query('SELECT 1 FROM Bairro WHERE "idBairro" = $1', [idBairro]);
+        if (bairro.rows.length === 0) {
             return res.status(400).json({
                 message: 'Bairro não encontrado'
             });
         }
 
         // Inserir no banco de dados
-        const [result] = await sql.query(
-            'INSERT INTO Logradouro (nome, idBairro) VALUES (?, ?)',
+        const result = await client.query(
+            'INSERT INTO Logradouro (nome, "idBairro") VALUES ($1, $2) RETURNING "idLogradouro"',
             [nome, idBairro]
         );
 
         // Buscar os dados completos do logradouro criado
-        const [novoLogradouro] = await sql.query(`
+        const novoLogradouro = await client.query(`
             SELECT l.*, b.nome as bairro, c.nome as cidade, e.nome as estado, e.sigla 
             FROM Logradouro l 
-            JOIN Bairro b ON l.idBairro = b.idBairro
-            JOIN Cidade c ON b.idCidade = c.idCidade
-            JOIN Estado e ON c.idEstado = e.idEstado
-            WHERE l.idLogradouro = ?
-        `, [result.insertId]);
+            JOIN Bairro b ON l."idBairro" = b."idBairro"
+            JOIN Cidade c ON b."idCidade" = c."idCidade"
+            JOIN Estado e ON c."idEstado" = e."idEstado"
+            WHERE l."idLogradouro" = $1
+        `, [result.rows[0].idLogradouro]);
 
         res.status(201).json({
             message: 'Logradouro criado com sucesso',
-            data: novoLogradouro[0]
+            data: novoLogradouro.rows[0]
         });
 
     } catch (error) {
         // Verificar se é erro de duplicação (logradouro já existe no bairro)
-        if (error.code === 'ER_DUP_ENTRY') {
+        if (error.code === '23505') { // Código de violação de constraint única no PostgreSQL
             return res.status(409).json({
                 message: 'Já existe um logradouro com este nome no bairro selecionado'
             });
@@ -134,17 +134,17 @@ async function criarLogradouro(req, res) {
         });
         console.error('Erro ao criar logradouro:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function atualizarLogradouro(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idLogradouro } = req.params;
 
         const {
@@ -153,15 +153,15 @@ async function atualizarLogradouro(req, res) {
         } = req.body;
 
         // Verificar se o logradouro existe
-        const [logradouro] = await sql.query('SELECT * FROM Logradouro WHERE idLogradouro = ?', [idLogradouro]);
-        if (logradouro.length === 0) {
+        const logradouro = await client.query('SELECT * FROM Logradouro WHERE "idLogradouro" = $1', [idLogradouro]);
+        if (logradouro.rows.length === 0) {
             return res.status(404).json({ message: 'Logradouro não encontrado' });
         }
 
         // Verificar se o novo bairro existe, se for fornecido
         if (idBairro) {
-            const [bairro] = await sql.query('SELECT 1 FROM Bairro WHERE idBairro = ?', [idBairro]);
-            if (bairro.length === 0) {
+            const bairro = await client.query('SELECT 1 FROM Bairro WHERE "idBairro" = $1', [idBairro]);
+            if (bairro.rows.length === 0) {
                 return res.status(400).json({
                     message: 'Bairro não encontrado'
                 });
@@ -180,36 +180,39 @@ async function atualizarLogradouro(req, res) {
         let query = 'UPDATE Logradouro SET ';
         const setClauses = [];
         const values = [];
+        let paramCount = 1;
         
         for (const [key, value] of Object.entries(updateFields)) {
-            setClauses.push(`${key} = ?`);
+            const columnName = key === 'idBairro' ? '"idBairro"' : key;
+            setClauses.push(`${columnName} = $${paramCount}`);
             values.push(value);
+            paramCount++;
         }
         
         query += setClauses.join(', ');
-        query += ' WHERE idLogradouro = ?';
+        query += ` WHERE "idLogradouro" = $${paramCount}`;
         values.push(idLogradouro);
 
-        await sql.query(query, values);
+        await client.query(query, values);
 
         // Buscar o logradouro atualizado
-        const [updatedLogradouro] = await sql.query(`
+        const updatedLogradouro = await client.query(`
             SELECT l.*, b.nome as bairro, c.nome as cidade, e.nome as estado, e.sigla 
             FROM Logradouro l 
-            JOIN Bairro b ON l.idBairro = b.idBairro
-            JOIN Cidade c ON b.idCidade = c.idCidade
-            JOIN Estado e ON c.idEstado = e.idEstado
-            WHERE l.idLogradouro = ?
+            JOIN Bairro b ON l."idBairro" = b."idBairro"
+            JOIN Cidade c ON b."idCidade" = c."idCidade"
+            JOIN Estado e ON c."idEstado" = e."idEstado"
+            WHERE l."idLogradouro" = $1
         `, [idLogradouro]);
 
         res.status(200).json({
             message: 'Logradouro atualizado com sucesso',
-            data: updatedLogradouro[0]
+            data: updatedLogradouro.rows[0]
         });
 
     } catch (error) {
         // Verificar se é erro de duplicação (logradouro já existe no bairro)
-        if (error.code === 'ER_DUP_ENTRY') {
+        if (error.code === '23505') { // Código de violação de constraint única no PostgreSQL
             return res.status(409).json({
                 message: 'Já existe um logradouro com este nome no bairro selecionado'
             });
@@ -221,43 +224,43 @@ async function atualizarLogradouro(req, res) {
         });
         console.error('Erro ao atualizar logradouro:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function excluirLogradouro(req, res) {
-    let sql;
+    let client;
     
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idLogradouro } = req.params;
 
         // Verificar se o logradouro existe
-        const [logradouro] = await sql.query(`
+        const logradouro = await client.query(`
             SELECT l.*, b.nome as bairro, c.nome as cidade, e.nome as estado, e.sigla 
             FROM Logradouro l 
-            JOIN Bairro b ON l.idBairro = b.idBairro
-            JOIN Cidade c ON b.idCidade = c.idCidade
-            JOIN Estado e ON c.idEstado = e.idEstado
-            WHERE l.idLogradouro = ?
+            JOIN Bairro b ON l."idBairro" = b."idBairro"
+            JOIN Cidade c ON b."idCidade" = c."idCidade"
+            JOIN Estado e ON c."idEstado" = e."idEstado"
+            WHERE l."idLogradouro" = $1
         `, [idLogradouro]);
         
-        if (logradouro.length === 0) {
+        if (logradouro.rows.length === 0) {
             return res.status(404).json({ message: 'Logradouro não encontrado' });
         }
 
-        await sql.query('DELETE FROM Logradouro WHERE idLogradouro = ?', [idLogradouro]);
+        await client.query('DELETE FROM Logradouro WHERE "idLogradouro" = $1', [idLogradouro]);
 
         res.status(200).json({
             message: 'Logradouro excluído com sucesso',
-            data: logradouro[0]
+            data: logradouro.rows[0]
         });
 
     } catch (error) {
         // Verificar se o erro é devido a uma restrição de chave estrangeira
-        if (error.code === 'ER_ROW_IS_REFERENCED_2') {
+        if (error.code === '23503') { // Código de violação de chave estrangeira no PostgreSQL
             return res.status(400).json({
                 message: 'Não é possível excluir o logradouro pois está sendo utilizado em CEPs ou Endereços'
             });
@@ -269,8 +272,8 @@ async function excluirLogradouro(req, res) {
         });
         console.error('Erro ao excluir logradouro:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }

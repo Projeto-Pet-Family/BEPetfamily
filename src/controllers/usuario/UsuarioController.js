@@ -1,54 +1,54 @@
-const sqlconnection = require('../../connections/SQLConnections.js');
+const pool = require('../../connections/SQLConnections.js');
 
 async function lerUsuarios(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
-        const [result] = await sql.query('SELECT * FROM Usuario');
-        res.status(200).send(result);
+        client = await pool.connect();
+        const result = await client.query('SELECT * FROM Usuario');
+        res.status(200).send(result.rows);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao ler os usuários, confira o console'
         });
         console.log(error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            client.release();
         }
     }
 }
 
 async function buscarUsuarioPorId(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idUsuario } = req.params;
-        const [result] = await sql.query('SELECT * FROM Usuario WHERE idUsuario = ?', [idUsuario]);
+        const result = await client.query('SELECT * FROM Usuario WHERE idUsuario = $1', [idUsuario]);
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Usuário não encontrado' });
         }
 
-        res.status(200).send(result[0]);
+        res.status(200).send(result.rows[0]);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao buscar o usuário, confira o console'
         });
         console.log(error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            client.release();
         }
     }
 }
 
 async function inserirUsuario(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
 
         const { 
             nome, 
@@ -62,45 +62,43 @@ async function inserirUsuario(req, res) {
             dataCadastro = new Date()
         } = req.body;
 
-        const [result] = await sql.query(
-            'INSERT INTO Usuario (nome, cpf, email, telefone, senha, ativado, desativado, esqueceuSenha, dataCadastro) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        const result = await client.query(
+            `INSERT INTO Usuario 
+             (nome, cpf, email, telefone, senha, ativado, desativado, esqueceuSenha, dataCadastro) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
+             RETURNING *`,
             [nome, cpf, email, telefone, senha, ativado, desativado, esqueceuSenha, dataCadastro]
         );
 
-        const novoUsuario = {
-            idUsuario: result.insertId,
-            nome,
-            cpf,
-            email,
-            telefone,
-            ativado,
-            desativado,
-            esqueceuSenha,
-            dataCadastro
-        };
-
         res.status(201).json({
             message: 'Usuário criado com sucesso!',
-            data: novoUsuario
+            data: result.rows[0]
         });
 
     } catch (error) {
+        // Tratamento para duplicados
+        if (error.code === '23505') {
+            return res.status(409).json({
+                message: 'CPF ou email já cadastrado'
+            });
+        }
+
         res.status(500).json({
             message: 'Erro ao criar o usuário, confira o console'
         });
         console.log(error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            client.release();
         }
     }
 }
 
 async function atualizarUsuario(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idUsuario } = req.params;
 
         const {
@@ -114,14 +112,15 @@ async function atualizarUsuario(req, res) {
             esqueceuSenha = null
         } = req.body;
 
-        const [user] = await sql.query('SELECT * FROM Usuario WHERE idUsuario = ?', [idUsuario]);
+        const userResult = await client.query('SELECT * FROM Usuario WHERE idUsuario = $1', [idUsuario]);
         
-        if (user.length === 0) {
+        if (userResult.rows.length === 0) {
             return res.status(404).json({ message: 'Usuário não encontrado' });
         }
 
         const updateFields = {};
         const updateValues = [];
+        let paramCount = 1;
 
         if (nome !== null) { updateFields.nome = nome; }
         if (cpf !== null) { updateFields.cpf = cpf; }
@@ -140,63 +139,79 @@ async function atualizarUsuario(req, res) {
         const setClauses = [];
         
         for (const [key, value] of Object.entries(updateFields)) {
-            setClauses.push(`${key} = ?`);
+            setClauses.push(`${key} = $${paramCount}`);
             updateValues.push(value);
+            paramCount++;
         }
         
         query += setClauses.join(', ');
-        query += ' WHERE idUsuario = ?';
+        query += ` WHERE idUsuario = $${paramCount} RETURNING *`;
         updateValues.push(idUsuario);
 
-        await sql.query(query, updateValues);
-
-        const [updatedUser] = await sql.query('SELECT * FROM Usuario WHERE idUsuario = ?', [idUsuario]);
+        const result = await client.query(query, updateValues);
 
         res.status(200).json({
             message: 'Usuário atualizado com sucesso',
-            data: updatedUser[0]
+            data: result.rows[0]
         });
 
     } catch (error) {
+        // Tratamento para duplicados
+        if (error.code === '23505') {
+            return res.status(409).json({
+                message: 'CPF ou email já cadastrado'
+            });
+        }
+
         res.status(500).json({
             message: 'Erro ao atualizar usuário, confira o console'
         });
         console.log(error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            client.release();
         }
     }
 }
 
 async function excluirUsuario(req, res) {
-    let sql;
+    let client;
     
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idUsuario } = req.params;
 
-        const [user] = await sql.query('SELECT * FROM Usuario WHERE idUsuario = ?', [idUsuario]);
+        const userResult = await client.query('SELECT * FROM Usuario WHERE idUsuario = $1', [idUsuario]);
         
-        if (user.length === 0) {
+        if (userResult.rows.length === 0) {
             return res.status(404).json({ message: 'Usuário não encontrado' });
         }
 
-        await sql.query('DELETE FROM Usuario WHERE idUsuario = ?', [idUsuario]);
+        const result = await client.query(
+            'DELETE FROM Usuario WHERE idUsuario = $1 RETURNING *',
+            [idUsuario]
+        );
 
         res.status(200).json({
             message: 'Usuário deletado com sucesso!',
-            deletedUser: user[0]
+            deletedUser: result.rows[0]
         });
 
     } catch (error) {
+        // Tratamento para chave estrangeira
+        if (error.code === '23503') {
+            return res.status(400).json({
+                message: 'Não é possível excluir o usuário pois está vinculado a outros registros'
+            });
+        }
+
         res.status(500).json({
             message: 'Erro ao excluir usuário, confira o console'
         });
         console.log(error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            client.release();
         }
     }
 }

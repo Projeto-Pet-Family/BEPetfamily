@@ -1,156 +1,151 @@
-const sqlconnection = require('../../connections/SQLConnections.js')
+const pool = require('../../connections/SQLConnections.js');
 
 async function lerPorte(req, res) {
-    let sql
+    let client;
     try {
-        sql = await sqlconnection()
-        const [result] = await sql.query('SELECT * FROM Porte ORDER BY descricao')
-        res.status(200).send(result)
+        client = await pool.connect();
+        const result = await client.query('SELECT * FROM Porte ORDER BY descricao');
+        res.status(200).send(result.rows);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao ler os portes',
             error: error.message
-        })
-        console.error('Erro ao ler portes:', error)
+        });
+        console.error('Erro ao ler portes:', error);
     } finally {
-        if (sql) await sql.end()
+        if (client) client.release();
     }
 }
 
 async function inserirPorte(req, res) {
-    let sql
+    let client;
     try {
-        sql = await sqlconnection()
-        const { descricao } = req.body
+        client = await pool.connect();
+        const { descricao } = req.body;
 
         // Validação
         if (!descricao || descricao.trim() === '') {
             return res.status(400).json({
                 message: 'Descrição do porte é obrigatória'
-            })
+            });
         }
 
-        // Query direta
-        const [result] = await sql.query(
-            'INSERT INTO Porte (descricao) VALUES (?)',
+        // Query com RETURNING para obter o registro inserido
+        const result = await client.query(
+            'INSERT INTO Porte (descricao) VALUES ($1) RETURNING *',
             [descricao.trim()]
-        )
+        );
 
         res.status(201).json({
             message: 'Porte criado com sucesso!',
-            data: {
-                idPorte: result.insertId,
-                descricao: descricao.trim()
-            }
-        })
+            data: result.rows[0]
+        });
 
     } catch (error) {
-        // Tratamento para duplicados
-        if (error.code === 'ER_DUP_ENTRY') {
+        // Tratamento para duplicados - PostgreSQL usa código 23505
+        if (error.code === '23505') {
             return res.status(409).json({
                 message: 'Já existe um porte com esta descrição'
-            })
+            });
         }
 
         res.status(500).json({
             message: 'Erro ao criar porte',
             error: error.message
-        })
-        console.error('Erro ao criar porte:', error)
+        });
+        console.error('Erro ao criar porte:', error);
     } finally {
-        if (sql) await sql.end()
+        if (client) client.release();
     }
 }
 
 async function updatePorte(req, res) {
-    let sql
+    let client;
     try {
-        sql = await sqlconnection()
-        const { idPorte } = req.params
-        const { descricao } = req.body
+        client = await pool.connect();
+        const { idPorte } = req.params;
+        const { descricao } = req.body;
 
         // Validação
         if (!descricao || descricao.trim() === '') {
             return res.status(400).json({
                 message: 'Descrição do porte é obrigatória'
-            })
+            });
         }
 
-        // Query direta
-        const [result] = await sql.query(
-            'UPDATE Porte SET descricao = ? WHERE idPorte = ?',
+        // Query com RETURNING para obter o registro atualizado
+        const result = await client.query(
+            'UPDATE Porte SET descricao = $1 WHERE idPorte = $2 RETURNING *',
             [descricao.trim(), idPorte]
-        )
+        );
 
-        if (result.affectedRows === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 message: 'Porte não encontrado'
-            })
+            });
         }
 
         res.status(200).json({
             message: 'Porte atualizado com sucesso!',
-            data: {
-                idPorte,
-                descricao: descricao.trim()
-            }
-        })
+            data: result.rows[0]
+        });
 
     } catch (error) {
-        // Tratamento para duplicados
-        if (error.code === 'ER_DUP_ENTRY') {
+        // Tratamento para duplicados - PostgreSQL usa código 23505
+        if (error.code === '23505') {
             return res.status(409).json({
                 message: 'Já existe um porte com esta descrição'
-            })
+            });
         }
 
         res.status(500).json({
             message: 'Erro ao atualizar porte',
             error: error.message
-        })
-        console.error('Erro ao atualizar porte:', error)
+        });
+        console.error('Erro ao atualizar porte:', error);
     } finally {
-        if (sql) await sql.end()
+        if (client) client.release();
     }
 }
 
 async function deletePorte(req, res) {
-    let sql
+    let client;
     try {
-        sql = await sqlconnection()
-        const { idPorte } = req.params
+        client = await pool.connect();
+        const { idPorte } = req.params;
 
-        // Query direta
-        const [result] = await sql.query(
-            'DELETE FROM Porte WHERE idPorte = ?',
+        // Query com RETURNING para verificar o que foi deletado
+        const result = await client.query(
+            'DELETE FROM Porte WHERE idPorte = $1 RETURNING *',
             [idPorte]
-        )
+        );
 
-        if (result.affectedRows === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 message: 'Porte não encontrado'
-            })
+            });
         }
 
         res.status(200).json({
-            message: 'Porte removido com sucesso'
-        })
+            message: 'Porte removido com sucesso',
+            data: result.rows[0]
+        });
 
     } catch (error) {
-        // Tratamento para chave estrangeira
-        if (error.code === 'ER_ROW_IS_REFERENCED_2') {
+        // Tratamento para chave estrangeira - PostgreSQL usa código 23503
+        if (error.code === '23503') {
             return res.status(400).json({
                 message: 'Não é possível remover o porte pois está sendo utilizado'
-            })
+            });
         }
 
         res.status(500).json({
             message: 'Erro ao remover porte',
             error: error.message
-        })
-        console.error('Erro ao remover porte:', error)
+        });
+        console.error('Erro ao remover porte:', error);
     } finally {
-        if (sql) await sql.end()
+        if (client) client.release();
     }
 }
 
@@ -159,4 +154,4 @@ module.exports = {
     inserirPorte,
     updatePorte,
     deletePorte
-}
+};

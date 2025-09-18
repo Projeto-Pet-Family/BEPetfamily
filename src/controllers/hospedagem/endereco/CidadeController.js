@@ -1,25 +1,25 @@
-const sqlconnection = require('../../../connections/SQLConnections.js');
+const pool = require('../../../connections/SQLConnections.js');
 
 async function lerCidades(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         
         // Adiciona filtro por estado se fornecido
         const { estadoId } = req.query;
-        let query = 'SELECT c.*, e.nome as estado, e.sigla FROM Cidade c JOIN Estado e ON c.idEstado = e.idEstado';
+        let query = 'SELECT c.*, e.nome as estado, e.sigla FROM cidade c JOIN estado e ON c.idestado = e.idestado';
         const params = [];
         
         if (estadoId) {
-            query += ' WHERE c.idEstado = ?';
+            query += ' WHERE c.id_estado = $1';
             params.push(estadoId);
         }
         
         query += ' ORDER BY c.nome';
         
-        const [result] = await sql.query(query, params);
-        res.status(200).json(result);
+        const result = await client.query(query, params);
+        res.status(200).json(result.rows);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao listar cidades',
@@ -27,31 +27,31 @@ async function lerCidades(req, res) {
         });
         console.error('Erro ao listar cidades:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function buscarCidadePorId(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idCidade } = req.params;
         
-        const [result] = await sql.query(`
+        const result = await client.query(`
             SELECT c.*, e.nome as estado, e.sigla 
-            FROM Cidade c 
-            JOIN Estado e ON c.idEstado = e.idEstado 
-            WHERE c.idCidade = ?
+            FROM cidade c 
+            JOIN estado e ON c.id_estado = e.id_estado 
+            WHERE c.id_cidade = $1
         `, [idCidade]);
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({ message: 'Cidade não encontrada' });
         }
 
-        res.status(200).json(result[0]);
+        res.status(200).json(result.rows[0]);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao buscar cidade',
@@ -59,17 +59,17 @@ async function buscarCidadePorId(req, res) {
         });
         console.error('Erro ao buscar cidade:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function criarCidade(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
 
         const { 
             nome,
@@ -84,35 +84,35 @@ async function criarCidade(req, res) {
         }
 
         // Verificar se o estado existe
-        const [estado] = await sql.query('SELECT 1 FROM Estado WHERE idEstado = ?', [idEstado]);
-        if (estado.length === 0) {
+        const estado = await client.query('SELECT 1 FROM estado WHERE id_estado = $1', [idEstado]);
+        if (estado.rows.length === 0) {
             return res.status(400).json({
                 message: 'Estado não encontrado'
             });
         }
 
         // Inserir no banco de dados
-        const [result] = await sql.query(
-            'INSERT INTO Cidade (nome, idEstado) VALUES (?, ?)',
+        const result = await client.query(
+            'INSERT INTO cidade (nome, id_estado) VALUES ($1, $2) RETURNING *',
             [nome, idEstado]
         );
 
         // Buscar os dados completos da cidade criada
-        const [novaCidade] = await sql.query(`
+        const novaCidade = await client.query(`
             SELECT c.*, e.nome as estado, e.sigla 
-            FROM Cidade c 
-            JOIN Estado e ON c.idEstado = e.idEstado 
-            WHERE c.idCidade = ?
-        `, [result.insertId]);
+            FROM cidade c 
+            JOIN estado e ON c.id_estado = e.id_estado 
+            WHERE c.id_cidade = $1
+        `, [result.rows[0].id_cidade]);
 
         res.status(201).json({
             message: 'Cidade criada com sucesso',
-            data: novaCidade[0]
+            data: novaCidade.rows[0]
         });
 
     } catch (error) {
         // Verificar se é erro de duplicação (cidade já existe no estado)
-        if (error.code === 'ER_DUP_ENTRY') {
+        if (error.code === '23505') {
             return res.status(409).json({
                 message: 'Já existe uma cidade com este nome no estado selecionado'
             });
@@ -124,17 +124,17 @@ async function criarCidade(req, res) {
         });
         console.error('Erro ao criar cidade:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function atualizarCidade(req, res) {
-    let sql;
+    let client;
 
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idCidade } = req.params;
 
         const {
@@ -143,15 +143,15 @@ async function atualizarCidade(req, res) {
         } = req.body;
 
         // Verificar se a cidade existe
-        const [cidade] = await sql.query('SELECT * FROM Cidade WHERE idCidade = ?', [idCidade]);
-        if (cidade.length === 0) {
+        const cidade = await client.query('SELECT * FROM cidade WHERE id_cidade = $1', [idCidade]);
+        if (cidade.rows.length === 0) {
             return res.status(404).json({ message: 'Cidade não encontrada' });
         }
 
         // Verificar se o novo estado existe, se for fornecido
         if (idEstado) {
-            const [estado] = await sql.query('SELECT 1 FROM Estado WHERE idEstado = ?', [idEstado]);
-            if (estado.length === 0) {
+            const estado = await client.query('SELECT 1 FROM estado WHERE id_estado = $1', [idEstado]);
+            if (estado.rows.length === 0) {
                 return res.status(400).json({
                     message: 'Estado não encontrado'
                 });
@@ -161,43 +161,45 @@ async function atualizarCidade(req, res) {
         // Construir a query dinamicamente
         const updateFields = {};
         if (nome) updateFields.nome = nome;
-        if (idEstado) updateFields.idEstado = idEstado;
+        if (idEstado) updateFields.id_estado = idEstado;
 
         if (Object.keys(updateFields).length === 0) {
             return res.status(400).json({ message: 'Nenhum campo válido para atualização fornecido' });
         }
 
-        let query = 'UPDATE Cidade SET ';
+        let query = 'UPDATE cidade SET ';
         const setClauses = [];
         const values = [];
+        let paramCount = 1;
         
         for (const [key, value] of Object.entries(updateFields)) {
-            setClauses.push(`${key} = ?`);
+            setClauses.push(`${key} = $${paramCount}`);
             values.push(value);
+            paramCount++;
         }
         
         query += setClauses.join(', ');
-        query += ' WHERE idCidade = ?';
+        query += ` WHERE id_cidade = $${paramCount}`;
         values.push(idCidade);
 
-        await sql.query(query, values);
+        await client.query(query, values);
 
         // Buscar a cidade atualizada
-        const [updatedCidade] = await sql.query(`
+        const updatedCidade = await client.query(`
             SELECT c.*, e.nome as estado, e.sigla 
-            FROM Cidade c 
-            JOIN Estado e ON c.idEstado = e.idEstado 
-            WHERE c.idCidade = ?
+            FROM cidade c 
+            JOIN estado e ON c.id_estado = e.id_estado 
+            WHERE c.id_cidade = $1
         `, [idCidade]);
 
         res.status(200).json({
             message: 'Cidade atualizada com sucesso',
-            data: updatedCidade[0]
+            data: updatedCidade.rows[0]
         });
 
     } catch (error) {
         // Verificar se é erro de duplicação (cidade já existe no estado)
-        if (error.code === 'ER_DUP_ENTRY') {
+        if (error.code === '23505') {
             return res.status(409).json({
                 message: 'Já existe uma cidade com este nome no estado selecionado'
             });
@@ -209,41 +211,41 @@ async function atualizarCidade(req, res) {
         });
         console.error('Erro ao atualizar cidade:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }
 
 async function excluirCidade(req, res) {
-    let sql;
+    let client;
     
     try {
-        sql = await sqlconnection();
+        client = await pool.connect();
         const { idCidade } = req.params;
 
         // Verificar se a cidade existe
-        const [cidade] = await sql.query(`
+        const cidade = await client.query(`
             SELECT c.*, e.nome as estado, e.sigla 
-            FROM Cidade c 
-            JOIN Estado e ON c.idEstado = e.idEstado 
-            WHERE c.idCidade = ?
+            FROM cidade c 
+            JOIN estado e ON c.id_estado = e.id_estado 
+            WHERE c.id_cidade = $1
         `, [idCidade]);
         
-        if (cidade.length === 0) {
+        if (cidade.rows.length === 0) {
             return res.status(404).json({ message: 'Cidade não encontrada' });
         }
 
-        await sql.query('DELETE FROM Cidade WHERE idCidade = ?', [idCidade]);
+        await client.query('DELETE FROM cidade WHERE id_cidade = $1', [idCidade]);
 
         res.status(200).json({
             message: 'Cidade excluída com sucesso',
-            data: cidade[0]
+            data: cidade.rows[0]
         });
 
     } catch (error) {
         // Verificar se o erro é devido a uma restrição de chave estrangeira
-        if (error.code === 'ER_ROW_IS_REFERENCED_2') {
+        if (error.code === '23503') {
             return res.status(400).json({
                 message: 'Não é possível excluir a cidade pois está sendo utilizada em bairros'
             });
@@ -255,8 +257,8 @@ async function excluirCidade(req, res) {
         });
         console.error('Erro ao excluir cidade:', error);
     } finally {
-        if (sql) {
-            await sql.end();
+        if (client) {
+            await client.end();
         }
     }
 }

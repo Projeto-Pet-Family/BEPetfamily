@@ -1,11 +1,11 @@
-const sqlconnection = require('../../connections/SQLConnections.js')
+const pool = require('../../connections/SQLConnections.js');
 
 async function lerPet(req, res) {
-    let sql
+    let client;
     try {
-        sql = await sqlconnection()
+        client = await pool.connect();
 
-        const [result] = await sql.query(`
+        const result = await client.query(`
             SELECT p.*, 
                    u.nome as nomeUsuario,
                    po.descricao as descricaoPorte,
@@ -16,30 +16,29 @@ async function lerPet(req, res) {
             LEFT JOIN Porte po ON p.idPorte = po.idPorte
             LEFT JOIN Especie e ON p.idEspecie = e.idEspecie
             LEFT JOIN Raca r ON p.idRaca = r.idRaca
-        `)
+        `);
 
-        res.status(200).send(result)
+        res.status(200).send(result.rows);
 
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao ler os pets, confira o console'
-        })
-        console.log(error)
+        });
+        console.log('Erro detalhado:', error);
     } finally {
-        if (sql) {
-            await sql.end()
+        if (client) {
+            client.release();
         }
     }
 }
 
 async function lerPetPorId(req, res) {
-    let sql
+    let client;
     try {
-        sql = await sqlconnection()
+        client = await pool.connect();
+        const { idPet } = req.params;
 
-        const { idPet } = req.params
-
-        const [result] = await sql.query(`
+        const result = await client.query(`
             SELECT p.*, 
                    u.nome as nomeUsuario,
                    po.descricao as descricaoPorte,
@@ -50,48 +49,48 @@ async function lerPetPorId(req, res) {
             LEFT JOIN Porte po ON p.idPorte = po.idPorte
             LEFT JOIN Especie e ON p.idEspecie = e.idEspecie
             LEFT JOIN Raca r ON p.idRaca = r.idRaca
-            WHERE p.idPet = ?
-        `, idPet)
+            WHERE p.idPet = $1
+        `, [idPet]);
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 message: 'Pet não encontrado'
-            })
+            });
         }
 
-        res.status(200).send(result[0])
+        res.status(200).send(result.rows[0]);
 
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao ler o pet, confira o console'
-        })
-        console.log(error)
+        });
+        console.log(error);
     } finally {
-        if (sql) {
-            await sql.end()
+        if (client) {
+            client.release();
         }
     }
 }
 
 async function inserirPet(req, res) {
-    let sql
+    let client;
     try {
-        sql = await sqlconnection()
-
-        const { idUsuario, idPorte, idEspecie, idRaca, nome, sexo, nascimento } = req.body
+        client = await pool.connect();
+        const { idUsuario, idPorte, idEspecie, idRaca, nome, sexo, nascimento } = req.body;
 
         // Validação básica dos campos obrigatórios
         if (!sexo || !nascimento) {
             return res.status(400).json({
                 message: 'Sexo e nascimento são campos obrigatórios'
-            })
+            });
         }
 
-        // Query direta para inserção
-        const [result] = await sql.query(`
+        // Query para inserção com RETURNING para obter o ID gerado
+        const result = await client.query(`
             INSERT INTO Pet 
             (idUsuario, idPorte, idEspecie, idRaca, nome, sexo, nascimento)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING *
         `, [
             idUsuario || null,
             idPorte || null,
@@ -100,54 +99,51 @@ async function inserirPet(req, res) {
             nome || null,
             sexo,
             nascimento
-        ])
+        ]);
 
         res.status(201).json({
             message: 'Pet criado com sucesso!',
-            data: {
-                idPet: result.insertId,
-                ...req.body
-            }
-        })
+            data: result.rows[0]
+        });
 
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao criar o pet, confira o console'
-        })
-        console.log(error)
+        });
+        console.log(error);
     } finally {
-        if (sql) {
-            await sql.end()
+        if (client) {
+            client.release();
         }
     }
 }
 
 async function updatePet(req, res) {
-    let sql
+    let client;
     try {
-        sql = await sqlconnection()
-
-        const { idPet } = req.params
-        const { idUsuario, idPorte, idEspecie, idRaca, nome, sexo, nascimento } = req.body
+        client = await pool.connect();
+        const { idPet } = req.params;
+        const { idUsuario, idPorte, idEspecie, idRaca, nome, sexo, nascimento } = req.body;
 
         // Validação básica dos campos obrigatórios
         if (!sexo || !nascimento) {
             return res.status(400).json({
                 message: 'Sexo e nascimento são campos obrigatórios'
-            })
+            });
         }
 
-        // Query direta para atualização
-        await sql.query(`
+        // Query para atualização com RETURNING para obter os dados atualizados
+        const result = await client.query(`
             UPDATE Pet SET
-                idUsuario = ?,
-                idPorte = ?,
-                idEspecie = ?,
-                idRaca = ?,
-                nome = ?,
-                sexo = ?,
-                nascimento = ?
-            WHERE idPet = ?
+                idUsuario = $1,
+                idPorte = $2,
+                idEspecie = $3,
+                idRaca = $4,
+                nome = $5,
+                sexo = $6,
+                nascimento = $7
+            WHERE idPet = $8
+            RETURNING *
         `, [
             idUsuario || null,
             idPorte || null,
@@ -157,50 +153,63 @@ async function updatePet(req, res) {
             sexo,
             nascimento,
             idPet
-        ])
+        ]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                message: 'Pet não encontrado para atualização'
+            });
+        }
 
         res.status(200).json({
             message: 'Pet atualizado com sucesso!',
-            data: {
-                idPet,
-                ...req.body
-            }
-        })
+            data: result.rows[0]
+        });
 
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao atualizar o pet, confira o console'
-        })
-        console.log(error)
+        });
+        console.log(error);
     } finally {
-        if (sql) {
-            await sql.end()
+        if (client) {
+            client.release();
         }
     }
 }
 
 async function deletePet(req, res) {
-    let sql
+    let client;
     try {
-        sql = await sqlconnection()
+        client = await pool.connect();
+        const { idPet } = req.params;
 
-        const { idPet } = req.params
+        // Query para exclusão com RETURNING para verificar o que foi deletado
+        const result = await client.query(`
+            DELETE FROM Pet 
+            WHERE idPet = $1
+            RETURNING *
+        `, [idPet]);
 
-        // Query direta para exclusão
-        await sql.query('DELETE FROM Pet WHERE idPet = ?', idPet)
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                message: 'Pet não encontrado para exclusão'
+            });
+        }
 
         res.status(200).json({
             message: 'Pet deletado com sucesso',
-        })
+            data: result.rows[0]
+        });
 
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao deletar o pet, confira o console'
-        })
-        console.log(error)
+        });
+        console.log(error);
     } finally {
-        if (sql) {
-            await sql.end()
+        if (client) {
+            client.release();
         }
     }
 }
@@ -211,4 +220,4 @@ module.exports = {
     inserirPet,
     updatePet,
     deletePet
-}
+};
