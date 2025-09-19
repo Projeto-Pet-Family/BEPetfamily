@@ -76,26 +76,26 @@ async function inserirPet(req, res) {
     let client;
     try {
         client = await pool.connect();
-        const { idUsuario, idPorte, idEspecie, idRaca, nome, sexo, nascimento } = req.body;
+        const { idusuario, idporte, idespecie, idraca, nome, sexo, nascimento } = req.body;
 
         // Validação básica dos campos obrigatórios
-        if (!sexo || !nascimento) {
+        if (!nome || !sexo || !idusuario || !idporte || !idespecie || !idraca) {
             return res.status(400).json({
-                message: 'Sexo e nascimento são campos obrigatórios'
+                message: 'Nome, sexo, idusuario, idporte, idespecie e idraca são campos obrigatórios'
             });
         }
 
         // Query para inserção com RETURNING para obter o ID gerado
         const result = await client.query(`
             INSERT INTO Pet 
-            (idUsuario, idPorte, idEspecie, idRaca, nome, sexo, nascimento)
+            (idusuario, idporte, idespecie, idraca, nome, sexo, nascimento)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *
         `, [
-            idUsuario || null,
-            idPorte || null,
-            idEspecie || null,
-            idRaca || null,
+            idusuario || null,
+            idporte || null,
+            idespecie || null,
+            idraca || null,
             nome || null,
             sexo,
             nascimento

@@ -1,9 +1,9 @@
-const pgconnection = require('../../connections/SQLConnections.js');
+const pool = require('../../connections/SQLConnections.js');
 
 async function listarServicosPorHospedagem(req, res) {
     let client;
     try {
-        client = await pgconnection();
+        client = await pool.connect();
         const { idHospedagem } = req.params;
 
         const query = `
@@ -32,20 +32,23 @@ async function listarServicosPorHospedagem(req, res) {
 }
 
 async function adicionarServicoAHospedagem(req, res) {
-    let client;
+    const client = await pool.connect();
     try {
-        client = await pgconnection();
+        await client.query('BEGIN'); // Iniciar transação
+
         const { idHospedagem } = req.params;
         const { descricao, preco } = req.body;
 
         // Validações
         if (!descricao || preco === undefined) {
+            await client.query('ROLLBACK');
             return res.status(400).json({
                 message: 'descricao e preco são obrigatórios'
             });
         }
 
         if (isNaN(preco) || preco < 0) {
+            await client.query('ROLLBACK');
             return res.status(400).json({
                 message: 'Preço deve ser um número positivo'
             });
@@ -58,6 +61,7 @@ async function adicionarServicoAHospedagem(req, res) {
         );
         
         if (hospedagemResult.rows.length === 0) {
+            await client.query('ROLLBACK');
             return res.status(404).json({ message: 'Hospedagem não encontrada' });
         }
 
@@ -65,9 +69,11 @@ async function adicionarServicoAHospedagem(req, res) {
         const result = await client.query(
             `INSERT INTO Servico (idHospedagem, descricao, preco) 
              VALUES ($1, $2, $3) 
-             RETURNING idServico, descricao, preco`,
+             RETURNING idServico, descricao, preco, duracao, ativo, dataCriacao`,
             [idHospedagem, descricao, preco]
         );
+
+        await client.query('COMMIT'); // Confirmar transação
 
         res.status(201).json({
             message: 'Serviço criado com sucesso',
@@ -75,22 +81,21 @@ async function adicionarServicoAHospedagem(req, res) {
         });
 
     } catch (error) {
+        await client.query('ROLLBACK');
         res.status(500).json({
             message: 'Erro ao criar serviço',
             error: error.message
         });
         console.error('Erro ao criar serviço:', error);
     } finally {
-        if (client) {
-            await client.end();
-        }
+        client.release(); // Liberar conexão de volta para o pool
     }
 }
 
 async function atualizarServico(req, res) {
     let client;
     try {
-        client = await pgconnection();
+        client = await pool.connect();
         const { idServico } = req.params;
         const { descricao, preco } = req.body;
 
@@ -162,7 +167,7 @@ async function atualizarServico(req, res) {
 async function removerServico(req, res) {
     let client;
     try {
-        client = await pgconnection();
+        client = await pool.connect();
         const { idServico } = req.params;
 
         // Verificar se o serviço existe

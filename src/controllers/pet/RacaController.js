@@ -5,11 +5,7 @@ async function lerRaca(req, res) {
     try {
         client = await pool.connect();
 
-        const result = await client.query(`
-            SELECT r.*, e.descricao as descricaoEspecie 
-            FROM Raca r
-            JOIN Especie e ON r.idEspecie = e.idEspecie
-        `);
+        const result = await client.query(` SELECT * FROM raca ORDER BY descricao `);
 
         res.status(200).send(result.rows);
 

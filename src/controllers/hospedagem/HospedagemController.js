@@ -1,16 +1,16 @@
-const sqlconnection = require('../../connections/SQLConnections.js');
+const pool = require('../../connections/SQLConnections.js');
 
 async function lerHospedagens(req, res) {
     let client;
 
     try {
-        client = await sqlconnection();
+        client = await pool.connect();
         
         const query = `
             SELECT 
-                h."idHospedagem",
+                h.idHospedagem,
                 h.nome,
-                e."idEndereco",
+                e.idendereco,
                 e.numero,
                 e.complemento,
                 cep.codigo as "CEP",
@@ -20,12 +20,12 @@ async function lerHospedagens(req, res) {
                 est.nome as estado,
                 est.sigla
             FROM Hospedagem h
-            JOIN Endereco e ON h."idEndereco" = e."idEndereco"
-            JOIN CEP cep ON e."idCEP" = cep."idCEP"
-            JOIN Logradouro log ON e."idLogradouro" = log."idLogradouro"
-            JOIN Bairro b ON log."idBairro" = b."idBairro"
-            JOIN Cidade cid ON b."idCidade" = cid."idCidade"
-            JOIN Estado est ON cid."idEstado" = est."idEstado"
+            JOIN Endereco e ON h.idEndereco = e.idEndereco
+            JOIN CEP cep ON e.idCEP = cep.idCEP
+            JOIN Logradouro log ON e.idLogradouro = log.idLogradouro
+            JOIN Bairro b ON log.idBairro = b.idBairro
+            JOIN Cidade cid ON b.idCidade = cid.idCidade
+            JOIN Estado est ON cid.idEstado = est.idEstado
             ORDER BY h.nome
         `;
         
@@ -48,7 +48,7 @@ async function buscarHospedagemPorId(req, res) {
     let client;
 
     try {
-        client = await sqlconnection();
+        client = await pool.connect();
         const { idHospedagem } = req.params;
         
         const query = `
@@ -103,22 +103,22 @@ async function criarHospedagem(req, res) {
     let client;
 
     try {
-        client = await sqlconnection();
+        client = await pool.connect();
 
         const { 
             nome,
-            idEndereco
+            idendereco
         } = req.body;
 
         // Validar campos obrigatórios
-        if (!nome || !idEndereco) {
+        if (!nome || !idendereco) {
             return res.status(400).json({
                 message: 'Nome e ID do endereço são campos obrigatórios'
             });
         }
 
         // Verificar se o endereço existe
-        const endereco = await client.query('SELECT 1 FROM Endereco WHERE "idEndereco" = $1', [idEndereco]);
+        const endereco = await client.query('SELECT 1 FROM Endereco WHERE "idendereco" = $1', [idendereco]);
         if (endereco.rows.length === 0) {
             return res.status(400).json({
                 message: 'Endereço não encontrado'
@@ -127,16 +127,16 @@ async function criarHospedagem(req, res) {
 
         // Inserir no banco de dados
         const result = await client.query(
-            'INSERT INTO Hospedagem (nome, "idEndereco") VALUES ($1, $2) RETURNING "idHospedagem"',
-            [nome, idEndereco]
+            'INSERT INTO Hospedagem (nome, idEndereco) VALUES ($1, $2) RETURNING idHospedagem',
+            [nome, idendereco]
         );
 
         // Buscar os dados completos da hospedagem criada
         const novaHospedagem = await client.query(`
             SELECT 
-                h."idHospedagem",
+                h.idhospedagem,
                 h.nome,
-                e."idEndereco",
+                e.idendereco,
                 e.numero,
                 e.complemento,
                 cep.codigo as "CEP",
@@ -146,13 +146,13 @@ async function criarHospedagem(req, res) {
                 est.nome as estado,
                 est.sigla
             FROM Hospedagem h
-            JOIN Endereco e ON h."idEndereco" = e."idEndereco"
-            JOIN CEP cep ON e."idCEP" = cep."idCEP"
-            JOIN Logradouro log ON e."idLogradouro" = log."idLogradouro"
-            JOIN Bairro b ON log."idBairro" = b."idBairro"
-            JOIN Cidade cid ON b."idCidade" = cid."idCidade"
-            JOIN Estado est ON cid."idEstado" = est."idEstado"
-            WHERE h."idHospedagem" = $1
+            JOIN Endereco e ON h.idEndereco = e.idEndereco
+            JOIN CEP cep ON e.idCEP = cep.idCEP
+            JOIN Logradouro log ON e.idLogradouro = log.idLogradouro
+            JOIN Bairro b ON log.idBairro = b.idBairro
+            JOIN Cidade cid ON b.idCidade = cid.idCidade
+            JOIN Estado est ON cid.idEstado = est.idEstado
+            WHERE h.idHospedagem = $1
         `, [result.rows[0].idHospedagem]);
 
         res.status(201).json({
@@ -184,7 +184,7 @@ async function atualizarHospedagem(req, res) {
     let client;
 
     try {
-        client = await sqlconnection();
+        client = await pool.connect();
         const { idHospedagem } = req.params;
 
         const {
@@ -288,7 +288,7 @@ async function excluirHospedagem(req, res) {
     let client;
     
     try {
-        client = await sqlconnection();
+        client = await pool.connect();
         const { idHospedagem } = req.params;
 
         // Verificar se a hospedagem existe
