@@ -1,9 +1,9 @@
-const pgconnection = require('../../connections/SQLConnections.js');
+const pool = require('../../connections/SQLConnections.js');
 
 async function lerStatus(req, res) {
     let client;
     try {
-        client = await pgconnection();
+        client = await pool.connect();
         const result = await client.query('SELECT * FROM Status');
         res.status(200).json(result.rows);
     } catch (error) {
@@ -22,7 +22,7 @@ async function lerStatus(req, res) {
 async function buscarStatusPorId(req, res) {
     let client;
     try {
-        client = await pgconnection();
+        client = await pool.connect();
         const { idStatus } = req.params;
         
         const result = await client.query('SELECT * FROM Status WHERE idStatus = $1', [idStatus]);
@@ -48,7 +48,7 @@ async function buscarStatusPorId(req, res) {
 async function criarStatus(req, res) {
     let client;
     try {
-        client = await pgconnection();
+        client = await pool.connect();
 
         // Cria status com emAprovacao=true e os demais false
         const result = await client.query(`
@@ -79,7 +79,7 @@ async function criarStatus(req, res) {
 async function atualizarStatus(req, res) {
     let client;
     try {
-        client = await pgconnection();
+        client = await pool.connect();
         const { idStatus } = req.params;
         const { 
             emAprovacao, 
@@ -174,7 +174,7 @@ async function atualizarStatus(req, res) {
 async function excluirStatus(req, res) {
     let client;
     try {
-        client = await pgconnection();
+        client = await pool.connect();
         const { idStatus } = req.params;
 
         // Verificar se o status existe

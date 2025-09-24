@@ -1,10 +1,10 @@
-const pgconnection = require('../../connections/SQLConnections.js');
+const pool = require('../../connections/SQLConnections.js');
 
 async function lerContratos(req, res) {
     let client;
 
     try {
-        client = await pgconnection();
+        client = await pool.connect();
         const query = `
             SELECT c.*, h.nome as hospedagem_nome, u.nome as usuario_nome, s.descricao as status_descricao
             FROM Contrato c
@@ -31,7 +31,7 @@ async function buscarContratoPorId(req, res) {
     let client;
 
     try {
-        client = await pgconnection();
+        client = await pool.connect();
         const { idContrato } = req.params;
 
         const query = `
@@ -67,7 +67,7 @@ async function criarContrato(req, res) {
     let client;
 
     try {
-        client = await pgconnection();
+        client = await pool.connect();
 
         const {
             idHospedagem,
@@ -149,7 +149,7 @@ async function atualizarContrato(req, res) {
     let client;
 
     try {
-        client = await pgconnection();
+        client = await pool.connect();
         const { idContrato } = req.params;
 
         const {
@@ -284,7 +284,7 @@ async function excluirContrato(req, res) {
     let client;
 
     try {
-        client = await pgconnection();
+        client = await pool.connect();
         const { idContrato } = req.params;
 
         // Verificar se o contrato existe
