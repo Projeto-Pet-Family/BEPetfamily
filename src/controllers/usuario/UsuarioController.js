@@ -1,4 +1,5 @@
 const pool = require('../../connections/SQLConnections.js');
+const bcrypt = require('bcrypt');
 
 async function lerUsuarios(req, res) {
     let client;
@@ -55,19 +56,23 @@ async function inserirUsuario(req, res) {
             cpf, 
             email,
             telefone,
-            senha,
+            senha, // Senha em texto puro
             ativado = false,
             desativado = false,
             esqueceuSenha = false,
             dataCadastro = new Date()
         } = req.body;
 
+        // Hash da senha
+        const saltRounds = 10;
+        const senhaHash = await bcrypt.hash(senha, saltRounds);
+
         const result = await client.query(
             `INSERT INTO Usuario 
              (nome, cpf, email, telefone, senha, ativado, desativado, esqueceuSenha, dataCadastro) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
-             RETURNING *`,
-            [nome, cpf, email, telefone, senha, ativado, desativado, esqueceuSenha, dataCadastro]
+             RETURNING idUsuario, nome, email, cpf, telefone, ativado, dataCadastro`,
+            [nome, cpf, email, telefone, senhaHash, ativado, desativado, esqueceuSenha, dataCadastro]
         );
 
         res.status(201).json({
@@ -76,7 +81,6 @@ async function inserirUsuario(req, res) {
         });
 
     } catch (error) {
-        // Tratamento para duplicados
         if (error.code === '23505') {
             return res.status(409).json({
                 message: 'CPF ou email já cadastrado'

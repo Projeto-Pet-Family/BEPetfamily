@@ -10,6 +10,7 @@ const cors = require('cors')
 /*  */
 
 const UsuarioRoute = require('./routes/usuario/UsuarioRoute.js')
+const AutenticationRoute = require('./routes/usuario/AutenticationRoute.js')
 
 const StatusRoute = require('./routes/contrato/StatusRoute.js')
 const ContratoRoute = require('./routes/contrato/ContratoRoute.js')
@@ -47,6 +48,7 @@ app.use(express.json())
 app.use(
     cors(),
     UsuarioRoute,
+    AutenticationRoute,
 
     StatusRoute,
     ContratoRoute,
