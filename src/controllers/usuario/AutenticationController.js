@@ -198,107 +198,6 @@ async function solicitarRecuperacaoSenha(req, res) {
     }
 }
 
-async function listarTodosEmails(req, res) {
-    let client;
-
-    try {
-        client = await pool.connect();
-        
-        const result = await client.query(
-            'SELECT email FROM Usuario WHERE desativado = false AND ativado = true'
-        );
-
-        const emails = result.rows.map(row => row.email);
-        
-        console.log('📧 Emails cadastrados no sistema:', emails);
-        
-        res.status(200).json({
-            success: true,
-            message: 'Lista de emails recuperada com sucesso',
-            total: emails.length,
-            emails: emails
-        });
-
-    } catch (error) {
-        console.error('Erro ao listar emails:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Erro ao listar emails'
-        });
-    } finally {
-        if (client) {
-            client.release();
-        }
-    }
-}
-
-async function verificarEmail(req, res) {
-    let client;
-
-    try {
-        client = await pool.connect();
-        const { email } = req.body;
-
-        if (!email) {
-            return res.status(400).json({
-                success: false,
-                message: 'Email é obrigatório'
-            });
-        }
-
-        const emailFormatado = email.trim().toLowerCase();
-        
-        console.log(`🔍 Verificando se email existe: ${emailFormatado}`);
-
-        // Buscar usuário pelo email
-        const result = await client.query(
-            'SELECT idusuario, nome, email FROM Usuario WHERE email = $1 AND desativado = false AND ativado = true',
-            [emailFormatado]
-        );
-
-        if (result.rows.length === 0) {
-            console.log(`❌ Email NÃO encontrado: ${emailFormatado}`);
-            
-            // ✅ Lista todos os emails para debug
-            const todosEmails = await client.query(
-                'SELECT email FROM Usuario WHERE desativado = false AND ativado = true'
-            );
-            const emailsCadastrados = todosEmails.rows.map(row => row.email);
-            console.log('📋 Emails cadastrados:', emailsCadastrados);
-            
-            return res.status(404).json({
-                success: false,
-                message: 'Email inexistente'
-            });
-        }
-
-        const usuario = result.rows[0];
-        console.log(`✅ Email ENCONTRADO: ${emailFormatado} - Nome: ${usuario.nome}`);
-
-        // Retorna sucesso indicando que o email existe
-        res.status(200).json({
-            success: true,
-            message: 'Email encontrado. Você pode redefinir sua senha.',
-            usuario: {
-                id: usuario.idusuario,
-                nome: usuario.nome,
-                email: usuario.email
-            }
-        });
-
-    } catch (error) {
-        console.error('Erro ao verificar email:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Erro ao verificar email'
-        });
-    } finally {
-        if (client) {
-            client.release();
-        }
-    }
-}
-
 async function redefinirSenha(req, res) {
     let client;
 
@@ -385,6 +284,4 @@ module.exports = {
     alterarSenha,
     solicitarRecuperacaoSenha,
     redefinirSenha,
-    verificarEmail,
-    listarTodosEmails
 };
