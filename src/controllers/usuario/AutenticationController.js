@@ -159,43 +159,138 @@ async function solicitarRecuperacaoSenha(req, res) {
             });
         }
 
-        // Buscar usuário
+        // Buscar usuário pelo email
         const result = await client.query(
-            'SELECT * FROM Usuario WHERE email = $1 AND desativado = false AND ativado = true',
+            'SELECT idusuario, nome, email, senha FROM Usuario WHERE email = $1 AND desativado = false AND ativado = true',
             [email.trim().toLowerCase()]
         );
 
-        // Sempre retornar mesma mensagem por segurança
-        const resposta = {
-            success: true,
-            message: 'Se o email existir em nosso sistema, enviaremos instruções de recuperação'
-        };
-
         if (result.rows.length === 0) {
-            return res.status(200).json(resposta);
+            return res.status(404).json({
+                success: false,
+                message: 'Email inexistente'
+            });
         }
 
         const usuario = result.rows[0];
 
-        // Gerar token simples (em produção, use crypto.randomBytes)
-        const token = Math.random().toString(36).substring(2, 15) + 
-                     Math.random().toString(36).substring(2, 15);
-
-        // Marcar para recuperação
-        await client.query(
-            'UPDATE Usuario SET esqueceuSenha = true, token_recuperacao = $1 WHERE idUsuario = $2',
-            [token, usuario.idusuario]
-        );
-
-        console.log(`📧 Token de recuperação para ${email}: ${token}`);
-
-        res.status(200).json(resposta);
+        // Retorna sucesso indicando que o email existe
+        res.status(200).json({
+            success: true,
+            message: 'Email encontrado. Você pode redefinir sua senha.',
+            usuario: {
+                id: usuario.idusuario,
+                nome: usuario.nome,
+                email: usuario.email
+            }
+        });
 
     } catch (error) {
         console.error('Erro na recuperação de senha:', error);
         res.status(500).json({
             success: false,
-            message: 'Erro ao solicitar recuperação de senha'
+            message: 'Erro ao verificar email'
+        });
+    } finally {
+        if (client) {
+            client.release();
+        }
+    }
+}
+
+async function listarTodosEmails(req, res) {
+    let client;
+
+    try {
+        client = await pool.connect();
+        
+        const result = await client.query(
+            'SELECT email FROM Usuario WHERE desativado = false AND ativado = true'
+        );
+
+        const emails = result.rows.map(row => row.email);
+        
+        console.log('📧 Emails cadastrados no sistema:', emails);
+        
+        res.status(200).json({
+            success: true,
+            message: 'Lista de emails recuperada com sucesso',
+            total: emails.length,
+            emails: emails
+        });
+
+    } catch (error) {
+        console.error('Erro ao listar emails:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro ao listar emails'
+        });
+    } finally {
+        if (client) {
+            client.release();
+        }
+    }
+}
+
+async function verificarEmail(req, res) {
+    let client;
+
+    try {
+        client = await pool.connect();
+        const { email } = req.body;
+
+        if (!email) {
+            return res.status(400).json({
+                success: false,
+                message: 'Email é obrigatório'
+            });
+        }
+
+        const emailFormatado = email.trim().toLowerCase();
+        
+        console.log(`🔍 Verificando se email existe: ${emailFormatado}`);
+
+        // Buscar usuário pelo email
+        const result = await client.query(
+            'SELECT idusuario, nome, email FROM Usuario WHERE email = $1 AND desativado = false AND ativado = true',
+            [emailFormatado]
+        );
+
+        if (result.rows.length === 0) {
+            console.log(`❌ Email NÃO encontrado: ${emailFormatado}`);
+            
+            // ✅ Lista todos os emails para debug
+            const todosEmails = await client.query(
+                'SELECT email FROM Usuario WHERE desativado = false AND ativado = true'
+            );
+            const emailsCadastrados = todosEmails.rows.map(row => row.email);
+            console.log('📋 Emails cadastrados:', emailsCadastrados);
+            
+            return res.status(404).json({
+                success: false,
+                message: 'Email inexistente'
+            });
+        }
+
+        const usuario = result.rows[0];
+        console.log(`✅ Email ENCONTRADO: ${emailFormatado} - Nome: ${usuario.nome}`);
+
+        // Retorna sucesso indicando que o email existe
+        res.status(200).json({
+            success: true,
+            message: 'Email encontrado. Você pode redefinir sua senha.',
+            usuario: {
+                id: usuario.idusuario,
+                nome: usuario.nome,
+                email: usuario.email
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao verificar email:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro ao verificar email'
         });
     } finally {
         if (client) {
@@ -209,13 +304,13 @@ async function redefinirSenha(req, res) {
 
     try {
         client = await pool.connect();
-        const { token, novaSenha } = req.body;
+        const { email, novaSenha } = req.body;
 
         // Validações
-        if (!token || !novaSenha) {
+        if (!email || !novaSenha) {
             return res.status(400).json({
                 success: false,
-                message: 'Token e nova senha são obrigatórios'
+                message: 'Email e nova senha são obrigatórios'
             });
         }
 
@@ -226,29 +321,46 @@ async function redefinirSenha(req, res) {
             });
         }
 
-        // Buscar usuário pelo token
+        const emailFormatado = email.trim().toLowerCase();
+        
+        console.log(`🔄 Tentando redefinir senha para: ${emailFormatado}`);
+
+        // Buscar usuário pelo email
         const userResult = await client.query(
-            'SELECT * FROM Usuario WHERE token_recuperacao = $1 AND esqueceuSenha = true',
-            [token]
+            'SELECT idusuario, senha FROM Usuario WHERE email = $1 AND desativado = false',
+            [emailFormatado]
         );
 
         if (userResult.rows.length === 0) {
-            return res.status(400).json({
+            console.log(`❌ Email não encontrado para redefinir senha: ${emailFormatado}`);
+            return res.status(404).json({
                 success: false,
-                message: 'Token inválido ou expirado'
+                message: 'Email não encontrado'
             });
         }
 
         const usuario = userResult.rows[0];
 
+        // Verificar se a nova senha é igual à atual
+        const senhaIgual = await bcrypt.compare(novaSenha, usuario.senha);
+        if (senhaIgual) {
+            console.log(`⚠️ Tentativa de usar senha igual à atual para: ${emailFormatado}`);
+            return res.status(400).json({
+                success: false,
+                message: 'A nova senha deve ser diferente da senha atual'
+            });
+        }
+
         // Hash da nova senha
         const novaSenhaHash = await bcrypt.hash(novaSenha, 10);
 
-        // Atualizar senha e limpar token
+        // Atualizar senha
         await client.query(
-            'UPDATE Usuario SET senha = $1, esqueceuSenha = false, token_recuperacao = NULL WHERE idUsuario = $2',
+            'UPDATE Usuario SET senha = $1 WHERE idUsuario = $2',
             [novaSenhaHash, usuario.idusuario]
         );
+
+        console.log(`✅ Senha redefinida com SUCESSO para: ${emailFormatado}`);
 
         res.status(200).json({
             success: true,
@@ -272,5 +384,7 @@ module.exports = {
     loginUsuario,
     alterarSenha,
     solicitarRecuperacaoSenha,
-    redefinirSenha
+    redefinirSenha,
+    verificarEmail,
+    listarTodosEmails
 };
