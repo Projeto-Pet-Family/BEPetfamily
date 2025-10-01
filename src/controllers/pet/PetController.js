@@ -214,10 +214,94 @@ async function deletePet(req, res) {
     }
 }
 
+async function listarPetsPorUsuario(req, res) {
+    let client;
+
+    try {
+        client = await pool.connect();
+        const { idusuario } = req.params;
+
+        console.log(`🔍 Buscando pets para o usuário ID: ${idusuario}`);
+
+        // Buscar pets do usuário
+        const result = await client.query(
+            `SELECT 
+                p.idPet,
+                p.nome,
+                p.idespecie,
+                p.idraca,
+                p.idusuario
+             FROM Pet p 
+             WHERE p.idUsuario = $1`,
+            [idusuario]
+        );
+
+        console.log(`✅ Encontrados ${result.rows.length} pets para o usuário ${idusuario}`);
+
+        res.status(200).json({
+            success: true,
+            message: `Pets encontrados: ${result.rows.length}`,
+            pets: result.rows
+        });
+
+    } catch (error) {
+        console.error('❌ Erro ao buscar pets do usuário:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno ao buscar pets',
+            error: error.message
+        });
+    } finally {
+        if (client) {
+            client.release();
+        }
+    }
+}
+
+async function buscarPetPorId(req, res) {
+    let client;
+
+    try {
+        client = await pool.connect();
+        const { idPet } = req.params;
+
+        const result = await client.query(
+            `SELECT * FROM Pet WHERE idPet = $1`,
+            [idPet]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Pet não encontrado'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Pet encontrado com sucesso',
+            pet: result.rows[0]
+        });
+
+    } catch (error) {
+        console.error('Erro ao buscar pet:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno ao buscar pet'
+        });
+    } finally {
+        if (client) {
+            client.release();
+        }
+    }
+}
+
 module.exports = {
     lerPet,
     lerPetPorId,
     inserirPet,
     updatePet,
-    deletePet
+    deletePet,
+    listarPetsPorUsuario,
+    buscarPetPorId
 };
