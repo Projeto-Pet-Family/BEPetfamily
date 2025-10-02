@@ -123,10 +123,10 @@ async function updatePet(req, res) {
     try {
         client = await pool.connect();
         const { idPet } = req.params;
-        const { idUsuario, idPorte, idEspecie, idRaca, nome, sexo, nascimento } = req.body;
+        const { idUsuario, idPorte, idEspecie, idRaca, nome, sexo } = req.body;
 
         // Validação básica dos campos obrigatórios
-        if (!sexo || !nascimento) {
+        if (!sexo) {
             return res.status(400).json({
                 message: 'Sexo e nascimento são campos obrigatórios'
             });
@@ -140,8 +140,7 @@ async function updatePet(req, res) {
                 idEspecie = $3,
                 idRaca = $4,
                 nome = $5,
-                sexo = $6,
-                nascimento = $7
+                sexo = $6
             WHERE idPet = $8
             RETURNING *
         `, [
@@ -151,7 +150,6 @@ async function updatePet(req, res) {
             idRaca || null,
             nome || null,
             sexo,
-            nascimento,
             idPet
         ]);
 
