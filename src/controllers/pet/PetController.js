@@ -126,13 +126,14 @@ async function updatePet(req, res) {
         const { idUsuario, idPorte, idEspecie, idRaca, nome, sexo } = req.body;
 
         // Validação básica dos campos obrigatórios
-        if (!sexo) {
+        if (!nome || !sexo) {
             return res.status(400).json({
-                message: 'Sexo e nascimento são campos obrigatórios'
+                message: 'Nome e sexo são campos obrigatórios'
             });
         }
 
         // Query para atualização com RETURNING para obter os dados atualizados
+        // CORREÇÃO: $7 em vez de $8, pois temos 7 parâmetros
         const result = await client.query(`
             UPDATE Pet SET
                 idUsuario = $1,
@@ -141,7 +142,7 @@ async function updatePet(req, res) {
                 idRaca = $4,
                 nome = $5,
                 sexo = $6
-            WHERE idPet = $8
+            WHERE idPet = $7
             RETURNING *
         `, [
             idUsuario || null,
@@ -150,7 +151,7 @@ async function updatePet(req, res) {
             idRaca || null,
             nome || null,
             sexo,
-            idPet
+            idPet  // Este é o 7º parâmetro, então WHERE idPet = $7
         ]);
 
         if (result.rows.length === 0) {
@@ -168,7 +169,7 @@ async function updatePet(req, res) {
         res.status(500).json({
             message: 'Erro ao atualizar o pet, confira o console'
         });
-        console.log(error);
+        console.log('Erro detalhado no updatePet:', error);
     } finally {
         if (client) {
             client.release();
