@@ -132,33 +132,42 @@ async function updatePet(req, res) {
             });
         }
 
-        // Query para atualização com RETURNING para obter os dados atualizados
-        // CORREÇÃO: $7 em vez de $8, pois temos 7 parâmetros
+        // Primeiro, buscar os dados atuais do pet
+        const petAtual = await client.query(
+            'SELECT * FROM Pet WHERE idPet = $1',
+            [idPet]
+        );
+
+        if (petAtual.rows.length === 0) {
+            return res.status(404).json({
+                message: 'Pet não encontrado'
+            });
+        }
+
+        const dadosAtuais = petAtual.rows[0];
+
+        // Usar COALESCE para manter os valores atuais se não forem fornecidos novos
         const result = await client.query(`
             UPDATE Pet SET
-                idUsuario = $1,
-                idPorte = $2,
-                idEspecie = $3,
-                idRaca = $4,
-                nome = $5,
-                sexo = $6
+                idUsuario = COALESCE($1, idUsuario),
+                idPorte = COALESCE($2, idPorte),
+                idEspecie = COALESCE($3, idEspecie),
+                idRaca = COALESCE($4, idRaca),
+                nome = COALESCE($5, nome),
+                sexo = COALESCE($6, sexo)
             WHERE idPet = $7
             RETURNING *
         `, [
-            idUsuario || null,
-            idPorte || null,
-            idEspecie || null,
-            idRaca || null,
-            nome || null,
-            sexo,
-            idPet  // Este é o 7º parâmetro, então WHERE idPet = $7
+            idUsuario !== undefined ? idUsuario : dadosAtuais.idusuario,
+            idPorte !== undefined ? idPorte : dadosAtuais.idporte,
+            idEspecie !== undefined ? idEspecie : dadosAtuais.idespecie,
+            idRaca !== undefined ? idRaca : dadosAtuais.idraca,
+            nome !== undefined ? nome : dadosAtuais.nome,
+            sexo !== undefined ? sexo : dadosAtuais.sexo,
+            idPet
         ]);
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({
-                message: 'Pet não encontrado para atualização'
-            });
-        }
+        console.log('✅ Pet atualizado:', result.rows[0]);
 
         res.status(200).json({
             message: 'Pet atualizado com sucesso!',
@@ -166,10 +175,10 @@ async function updatePet(req, res) {
         });
 
     } catch (error) {
+        console.error('❌ Erro detalhado no updatePet:', error);
         res.status(500).json({
             message: 'Erro ao atualizar o pet, confira o console'
         });
-        console.log('Erro detalhado no updatePet:', error);
     } finally {
         if (client) {
             client.release();
