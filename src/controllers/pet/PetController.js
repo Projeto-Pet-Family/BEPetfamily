@@ -257,7 +257,7 @@ async function listarPetsPorUsuario(req, res) {
         }
     }
 }
-
+/* 
 async function buscarPetPorId(req, res) {
     let client;
 
@@ -295,7 +295,7 @@ async function buscarPetPorId(req, res) {
         }
     }
 }
-
+ */
 module.exports = {
     lerPet,
     lerPetPorId,
@@ -303,5 +303,5 @@ module.exports = {
     updatePet,
     deletePet,
     listarPetsPorUsuario,
-    buscarPetPorId
+    /* buscarPetPorId */
 };

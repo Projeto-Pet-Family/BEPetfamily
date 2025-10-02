@@ -8,6 +8,6 @@ Router.post('/pet', PetController.inserirPet)
 Router.put('/pet/:idPet', PetController.updatePet)
 Router.delete('/pet/:idPet', PetController.deletePet)
 Router.get('/usuario/:idusuario/pets', PetController.listarPetsPorUsuario);
-Router.get('/:idPet', PetController.buscarPetPorId);
+/* Router.get('/:idPet', PetController.buscarPetPorId); */
 
 module.exports = Router
