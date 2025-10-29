@@ -1,9 +1,9 @@
-const pgconnection = require('../../connections/SQLConnections.js');
+const pool = require('../../connections/SQLConnections.js');
 
 async function lerContratosServico(req, res) {
     let client;
     try {
-        client = await pgconnection();
+        client = await pool();
         const result = await client.query('SELECT * FROM "ContratoServico"');
         res.status(200).json(result.rows);
     } catch (error) {
@@ -20,7 +20,7 @@ async function lerContratosServico(req, res) {
 async function buscarContratoServicoPorId(req, res) {
     let client;
     try {
-        client = await pgconnection();
+        client = await pool();
         const { idContratoServico } = req.params;
         const result = await client.query(
             'SELECT * FROM "ContratoServico" WHERE "idContratoServico" = $1', 
@@ -46,7 +46,7 @@ async function buscarContratoServicoPorId(req, res) {
 async function inserirContratoServico(req, res) {
     let client;
     try {
-        client = await pgconnection();
+        client = await pool();
         const { idContrato, idServico } = req.body;
 
         // Validação dos dados
@@ -93,7 +93,7 @@ async function inserirContratoServico(req, res) {
 async function atualizarContratoServico(req, res) {
     let client;
     try {
-        client = await pgconnection();
+        client = await pool();
         const { idContratoServico } = req.params;
         const { idContrato, idServico } = req.body;
 
@@ -150,7 +150,7 @@ async function atualizarContratoServico(req, res) {
 async function excluirContratoServico(req, res) {
     let client;
     try {
-        client = await pgconnection();
+        client = await pool();
         const { idContratoServico } = req.params;
 
         // Verifica se o registro existe
