@@ -1,12 +1,10 @@
 const express = require('express');
-const Router = express.Router();
-const ContratoServicoController = require('../../controllers/contrato/ContratoServicoController.js')
+const router = express.Router();
+const contratoServicoController = require('../controllers/contratoServicoController');
 
-// Rotas CRUD
-Router.get('/contratoservico', ContratoServicoController.lerContratosServico);
-Router.get('/contratoservico/:idContratoServico', ContratoServicoController.buscarContratoServicoPorId);
-Router.post('/contratoservico', ContratoServicoController.inserirContratoServico);
-Router.put('/contratoservico/:idContratoServico', ContratoServicoController.atualizarContratoServico);
-Router.delete('/contratoservico/:idContratoServico', ContratoServicoController.excluirContratoServico);
+router.post('/', contratoServicoController.adicionarServicoContrato);
+router.put('/:idContratoServico', contratoServicoController.atualizarServicoContrato);
+router.delete('/:idContratoServico', contratoServicoController.removerServicoContrato);
+router.get('/contrato/:idContrato', contratoServicoController.listarServicosContrato);
 
-module.exports = Router;
+module.exports = router;

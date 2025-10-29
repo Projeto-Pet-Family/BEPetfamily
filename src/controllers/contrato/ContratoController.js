@@ -6,11 +6,13 @@ async function lerContratos(req, res) {
     try {
         client = await pool.connect();
         const query = `
-            SELECT c.*, h.nome as hospedagem_nome, u.nome as usuario_nome, s.descricao as status_descricao
+            SELECT 
+                c.*, 
+                h.nome as hospedagem_nome, 
+                u.nome as usuario_nome
             FROM Contrato c
             LEFT JOIN Hospedagem h ON c.idHospedagem = h.idHospedagem
             LEFT JOIN Usuario u ON c.idUsuario = u.idUsuario
-            LEFT JOIN Status s ON c.idStatus = s.idStatus
         `;
         const result = await client.query(query);
         res.status(200).json(result.rows);
@@ -35,11 +37,13 @@ async function buscarContratoPorId(req, res) {
         const { idContrato } = req.params;
 
         const query = `
-            SELECT c.*, h.nome as hospedagem_nome, u.nome as usuario_nome, s.descricao as status_descricao
+            SELECT 
+                c.*, 
+                h.nome as hospedagem_nome, 
+                u.nome as usuario_nome
             FROM Contrato c
             LEFT JOIN Hospedagem h ON c.idHospedagem = h.idHospedagem
             LEFT JOIN Usuario u ON c.idUsuario = u.idUsuario
-            LEFT JOIN Status s ON c.idStatus = s.idStatus
             WHERE c.idContrato = $1
         `;
 
@@ -57,7 +61,7 @@ async function buscarContratoPorId(req, res) {
         });
         console.error('Erro ao buscar contrato:', error);
     } finally {
-        {
+        if (client) {
             await client.end();
         }
     }
@@ -72,26 +76,44 @@ async function criarContrato(req, res) {
         const {
             idHospedagem,
             idUsuario,
-            idStatus,
+            status = 'em_aprovacao', // Default: "em_aprovacao"
             dataInicio,
             dataFim
         } = req.body;
 
         // Validações básicas
-        if (!idHospedagem || !idUsuario || !idStatus || !dataInicio) {
+        if (!idHospedagem || !idUsuario || !dataInicio) {
             return res.status(400).json({
-                message: 'idHospedagem, idUsuario, idStatus e dataInicio são obrigatórios'
+                message: 'idHospedagem, idUsuario e dataInicio são obrigatórios'
+            });
+        }
+
+        // Validar status
+        const statusValidos = ['em_aprovacao', 'aprovado', 'em_execucao', 'concluido', 'negado', 'cancelado'];
+        if (!statusValidos.includes(status)) {
+            return res.status(400).json({
+                message: 'Status inválido. Valores permitidos: ' + statusValidos.join(', ')
             });
         }
 
         // Validar datas
         const inicio = new Date(dataInicio);
-        const fim = dataFim ? new Date(dataFim) : null;
+        const hoje = new Date();
+        hoje.setHours(0, 0, 0, 0);
 
-        if (fim && fim < inicio) {
+        if (inicio < hoje) {
             return res.status(400).json({
-                message: 'Data fim não pode ser anterior à data início'
+                message: 'Data início não pode ser anterior à data atual'
             });
+        }
+
+        if (dataFim) {
+            const fim = new Date(dataFim);
+            if (fim < inicio) {
+                return res.status(400).json({
+                    message: 'Data fim não pode ser anterior à data início'
+                });
+            }
         }
 
         // Verificar existência das entidades relacionadas
@@ -111,20 +133,37 @@ async function criarContrato(req, res) {
             return res.status(400).json({ message: 'Usuário não encontrado' });
         }
 
-        const statusResult = await client.query(
-            'SELECT idStatus FROM Status WHERE idStatus = $1', 
-            [idStatus]
-        );
-        if (statusResult.rows.length === 0) {
-            return res.status(400).json({ message: 'Status não encontrado' });
+        // Verificar se já existe contrato conflitante para as datas
+        const conflitoQuery = `
+            SELECT idContrato 
+            FROM Contrato 
+            WHERE idUsuario = $1 
+            AND status IN ('em_aprovacao', 'aprovado', 'em_execucao')
+            AND (
+                (dataInicio <= $2 AND dataFim >= $3) OR
+                (dataInicio <= $2 AND $3 IS NULL) OR
+                ($2 BETWEEN dataInicio AND COALESCE(dataFim, $2))
+            )
+        `;
+        
+        const conflitoResult = await client.query(conflitoQuery, [
+            idUsuario, 
+            dataInicio, 
+            dataFim || dataInicio
+        ]);
+
+        if (conflitoResult.rows.length > 0) {
+            return res.status(400).json({
+                message: 'Já existe um contrato ativo para este período'
+            });
         }
 
-        // Inserir contrato e retornar os dados
+        // Inserir contrato
         const result = await client.query(
-            `INSERT INTO Contrato (idHospedagem, idUsuario, idStatus, dataInicio, dataFim) 
+            `INSERT INTO Contrato (idHospedagem, idUsuario, status, dataInicio, dataFim) 
              VALUES ($1, $2, $3, $4, $5) 
              RETURNING *`,
-            [idHospedagem, idUsuario, idStatus, dataInicio, dataFim]
+            [idHospedagem, idUsuario, status, dataInicio, dataFim]
         );
 
         res.status(201).json({
@@ -155,7 +194,7 @@ async function atualizarContrato(req, res) {
         const {
             idHospedagem,
             idUsuario,
-            idStatus,
+            status,
             dataInicio,
             dataFim
         } = req.body;
@@ -167,6 +206,16 @@ async function atualizarContrato(req, res) {
         );
         if (contratoResult.rows.length === 0) {
             return res.status(404).json({ message: 'Contrato não encontrado' });
+        }
+
+        // Validar status se fornecido
+        if (status) {
+            const statusValidos = ['em_aprovacao', 'aprovado', 'em_execucao', 'concluido', 'negado', 'cancelado'];
+            if (!statusValidos.includes(status)) {
+                return res.status(400).json({
+                    message: 'Status inválido. Valores permitidos: ' + statusValidos.join(', ')
+                });
+            }
         }
 
         // Validar datas se fornecidas
@@ -202,16 +251,6 @@ async function atualizarContrato(req, res) {
             }
         }
 
-        if (idStatus) {
-            const statusResult = await client.query(
-                'SELECT idStatus FROM Status WHERE idStatus = $1', 
-                [idStatus]
-            );
-            if (statusResult.rows.length === 0) {
-                return res.status(400).json({ message: 'Status não encontrado' });
-            }
-        }
-
         // Construir query dinâmica
         const updateFields = {};
         const values = [];
@@ -227,9 +266,9 @@ async function atualizarContrato(req, res) {
             values.push(idUsuario);
             paramCount++;
         }
-        if (idStatus !== undefined) {
-            updateFields.idStatus = `$${paramCount}`;
-            values.push(idStatus);
+        if (status !== undefined) {
+            updateFields.status = `$${paramCount}`;
+            values.push(status);
             paramCount++;
         }
         if (dataInicio) {
@@ -273,6 +312,58 @@ async function atualizarContrato(req, res) {
             error: error.message
         });
         console.error('Erro ao atualizar contrato:', error);
+    } finally {
+        if (client) {
+            await client.end();
+        }
+    }
+}
+
+async function atualizarStatusContrato(req, res) {
+    let client;
+
+    try {
+        client = await pool.connect();
+        const { idContrato } = req.params;
+        const { status } = req.body;
+
+        // Validar status
+        const statusValidos = ['em_aprovacao', 'aprovado', 'em_execucao', 'concluido', 'negado', 'cancelado'];
+        if (!statusValidos.includes(status)) {
+            return res.status(400).json({
+                message: 'Status inválido. Valores permitidos: ' + statusValidos.join(', ')
+            });
+        }
+
+        // Verificar se o contrato existe
+        const contratoResult = await client.query(
+            'SELECT * FROM Contrato WHERE idContrato = $1', 
+            [idContrato]
+        );
+        if (contratoResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Contrato não encontrado' });
+        }
+
+        // Atualizar apenas o status
+        const result = await client.query(
+            `UPDATE Contrato 
+             SET status = $1, dataAtualizacao = CURRENT_TIMESTAMP
+             WHERE idContrato = $2 
+             RETURNING *`,
+            [status, idContrato]
+        );
+
+        res.status(200).json({
+            message: 'Status do contrato atualizado com sucesso',
+            data: result.rows[0]
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao atualizar status do contrato',
+            error: error.message
+        });
+        console.error('Erro ao atualizar status do contrato:', error);
     } finally {
         if (client) {
             await client.end();
@@ -342,57 +433,40 @@ async function buscarContratosPorUsuario(req, res) {
         const query = `
             SELECT 
                 c.idContrato,
+                c.idHospedagem,
+                c.idUsuario,
+                c.status,
                 c.dataInicio,
                 c.dataFim,
-                h.nome as hospedagem_nome,
-                h.idHospedagem,
-                s.descricao as status_descricao,
-                s.idStatus,
-                cp.idPet,
-                p.nome as pet_nome
+                c.dataCriacao,
+                c.dataAtualizacao,
+                h.nome as hospedagem_nome
             FROM Contrato c
             LEFT JOIN Hospedagem h ON c.idHospedagem = h.idHospedagem
-            LEFT JOIN Status s ON c.idStatus = s.idStatus
-            LEFT JOIN Contrato_Pet cp ON c.idContrato = cp.idContrato
-            LEFT JOIN Pet p ON cp.idPet = p.idPet
             WHERE c.idUsuario = $1
-            ORDER BY c.dataInicio DESC
+            ORDER BY c.dataInicio DESC, c.dataCriacao DESC
         `;
 
         const result = await client.query(query, [idUsuario]);
 
-        // Agrupar os resultados por contrato (um contrato pode ter múltiplos pets)
-        const contratosAgrupados = {};
-        
-        result.rows.forEach(row => {
-            const contratoId = row.idcontrato;
-            
-            if (!contratosAgrupados[contratoId]) {
-                contratosAgrupados[contratoId] = {
-                    idContrato: row.idcontrato,
-                    dataInicio: row.datainicio,
-                    dataFim: row.datafim,
-                    hospedagem_nome: row.hospedagem_nome,
-                    idHospedagem: row.idhospedagem,
-                    status_descricao: row.status_descricao,
-                    idStatus: row.idstatus,
-                    pets: []
-                };
-            }
-            
-            // Adicionar pet se existir
-            if (row.idpet) {
-                contratosAgrupados[contratoId].pets.push({
-                    idPet: row.idpet,
-                    pet_nome: row.pet_nome
-                });
-            }
+        // Formatar o status para português
+        const contratosFormatados = result.rows.map(contrato => {
+            const statusMap = {
+                'em_aprovacao': 'Em aprovação',
+                'aprovado': 'Aprovado',
+                'em_execucao': 'Em execução',
+                'concluido': 'Concluído',
+                'negado': 'Negado',
+                'cancelado': 'Cancelado'
+            };
+
+            return {
+                ...contrato,
+                status_descricao: statusMap[contrato.status] || 'Desconhecido'
+            };
         });
 
-        // Converter objeto para array
-        const contratos = Object.values(contratosAgrupados);
-
-        res.status(200).json(contratos);
+        res.status(200).json(contratosFormatados);
 
     } catch (error) {
         res.status(500).json({
@@ -407,68 +481,12 @@ async function buscarContratosPorUsuario(req, res) {
     }
 }
 
-// Método alternativo se você quiser uma versão mais simples sem agrupamento
-async function buscarContratosPorUsuarioSimples(req, res) {
-    let client;
-
-    try {
-        client = await pool.connect();
-        const { idUsuario } = req.params;
-
-        // Verificar se o usuário existe
-        const usuarioResult = await client.query(
-            'SELECT idUsuario FROM Usuario WHERE idUsuario = $1', 
-            [idUsuario]
-        );
-        if (usuarioResult.rows.length === 0) {
-            return res.status(404).json({ message: 'Usuário não encontrado' });
-        }
-
-        const query = `
-            SELECT 
-                c.idContrato,
-                c.dataInicio,
-                c.dataFim,
-                h.nome as hospedagem_nome,
-                h.idHospedagem,
-                s.descricao as status_descricao,
-                s.idStatus,
-                ARRAY_AGG(DISTINCT p.idPet) as idPets,
-                ARRAY_AGG(DISTINCT p.nome) as pet_nomes
-            FROM Contrato c
-            LEFT JOIN Hospedagem h ON c.idHospedagem = h.idHospedagem
-            LEFT JOIN Status s ON c.idStatus = s.idStatus
-            LEFT JOIN Contrato_Pet cp ON c.idContrato = cp.idContrato
-            LEFT JOIN Pet p ON cp.idPet = p.idPet
-            WHERE c.idUsuario = $1
-            GROUP BY c.idContrato, h.nome, h.idHospedagem, s.descricao, s.idStatus
-            ORDER BY c.dataInicio DESC
-        `;
-
-        const result = await client.query(query, [idUsuario]);
-
-        res.status(200).json(result.rows);
-
-    } catch (error) {
-        res.status(500).json({
-            message: 'Erro ao buscar contratos do usuário',
-            error: error.message
-        });
-        console.error('Erro ao buscar contratos do usuário:', error);
-    } finally {
-        if (client) {
-            await client.end();
-        }
-    }
-}
-
-// Método para buscar contratos por usuário e status
 async function buscarContratosPorUsuarioEStatus(req, res) {
     let client;
 
     try {
         client = await pool.connect();
-        const { idUsuario, idStatus } = req.query;
+        const { idUsuario, status } = req.query;
 
         if (!idUsuario) {
             return res.status(400).json({ message: 'idUsuario é obrigatório' });
@@ -486,39 +504,58 @@ async function buscarContratosPorUsuarioEStatus(req, res) {
         let query = `
             SELECT 
                 c.idContrato,
+                c.idHospedagem,
+                c.idUsuario,
+                c.status,
                 c.dataInicio,
                 c.dataFim,
-                h.nome as hospedagem_nome,
-                h.idHospedagem,
-                s.descricao as status_descricao,
-                s.idStatus,
-                ARRAY_AGG(DISTINCT p.idPet) as idPets,
-                ARRAY_AGG(DISTINCT p.nome) as pet_nomes
+                c.dataCriacao,
+                c.dataAtualizacao,
+                h.nome as hospedagem_nome
             FROM Contrato c
             LEFT JOIN Hospedagem h ON c.idHospedagem = h.idHospedagem
-            LEFT JOIN Status s ON c.idStatus = s.idStatus
-            LEFT JOIN Contrato_Pet cp ON c.idContrato = cp.idContrato
-            LEFT JOIN Pet p ON cp.idPet = p.idPet
             WHERE c.idUsuario = $1
         `;
 
         const values = [idUsuario];
         let paramCount = 2;
 
-        if (idStatus) {
-            query += ` AND c.idStatus = $${paramCount}`;
-            values.push(idStatus);
+        if (status) {
+            // Validar status
+            const statusValidos = ['em_aprovacao', 'aprovado', 'em_execucao', 'concluido', 'negado', 'cancelado'];
+            if (!statusValidos.includes(status)) {
+                return res.status(400).json({
+                    message: 'Status inválido. Valores permitidos: ' + statusValidos.join(', ')
+                });
+            }
+            
+            query += ` AND c.status = $${paramCount}`;
+            values.push(status);
             paramCount++;
         }
 
-        query += `
-            GROUP BY c.idContrato, h.nome, h.idHospedagem, s.descricao, s.idStatus
-            ORDER BY c.dataInicio DESC
-        `;
+        query += ` ORDER BY c.dataInicio DESC, c.dataCriacao DESC`;
 
         const result = await client.query(query, values);
 
-        res.status(200).json(result.rows);
+        // Formatar o status para português
+        const contratosFormatados = result.rows.map(contrato => {
+            const statusMap = {
+                'em_aprovacao': 'Em aprovação',
+                'aprovado': 'Aprovado',
+                'em_execucao': 'Em execução',
+                'concluido': 'Concluído',
+                'negado': 'Negado',
+                'cancelado': 'Cancelado'
+            };
+
+            return {
+                ...contrato,
+                status_descricao: statusMap[contrato.status] || 'Desconhecido'
+            };
+        });
+
+        res.status(200).json(contratosFormatados);
 
     } catch (error) {
         res.status(500).json({
@@ -538,6 +575,8 @@ module.exports = {
     buscarContratoPorId,
     criarContrato,
     atualizarContrato,
+    atualizarStatusContrato,
     excluirContrato,
-    buscarContratosPorUsuario
+    buscarContratosPorUsuario,
+    buscarContratosPorUsuarioEStatus
 };
