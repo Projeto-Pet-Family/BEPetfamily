@@ -182,10 +182,223 @@ async function excluirContratoServico(req, res) {
     }
 }
 
+async function buscarContratosPorUsuario(req, res) {
+    let client;
+
+    try {
+        client = await pool.connect();
+        const { idUsuario } = req.params;
+
+        // Verificar se o usuário existe
+        const usuarioResult = await client.query(
+            'SELECT idUsuario FROM Usuario WHERE idUsuario = $1', 
+            [idUsuario]
+        );
+        if (usuarioResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Usuário não encontrado' });
+        }
+
+        const query = `
+            SELECT 
+                c.idContrato,
+                c.dataInicio,
+                c.dataFim,
+                h.nome as hospedagem_nome,
+                h.idHospedagem,
+                s.descricao as status_descricao,
+                s.idStatus,
+                cp.idPet,
+                p.nome as pet_nome
+            FROM Contrato c
+            LEFT JOIN Hospedagem h ON c.idHospedagem = h.idHospedagem
+            LEFT JOIN Status s ON c.idStatus = s.idStatus
+            LEFT JOIN Contrato_Pet cp ON c.idContrato = cp.idContrato
+            LEFT JOIN Pet p ON cp.idPet = p.idPet
+            WHERE c.idUsuario = $1
+            ORDER BY c.dataInicio DESC
+        `;
+
+        const result = await client.query(query, [idUsuario]);
+
+        // Agrupar os resultados por contrato (um contrato pode ter múltiplos pets)
+        const contratosAgrupados = {};
+        
+        result.rows.forEach(row => {
+            const contratoId = row.idcontrato;
+            
+            if (!contratosAgrupados[contratoId]) {
+                contratosAgrupados[contratoId] = {
+                    idContrato: row.idcontrato,
+                    dataInicio: row.datainicio,
+                    dataFim: row.datafim,
+                    hospedagem_nome: row.hospedagem_nome,
+                    idHospedagem: row.idhospedagem,
+                    status_descricao: row.status_descricao,
+                    idStatus: row.idstatus,
+                    pets: []
+                };
+            }
+            
+            // Adicionar pet se existir
+            if (row.idpet) {
+                contratosAgrupados[contratoId].pets.push({
+                    idPet: row.idpet,
+                    pet_nome: row.pet_nome
+                });
+            }
+        });
+
+        // Converter objeto para array
+        const contratos = Object.values(contratosAgrupados);
+
+        res.status(200).json(contratos);
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao buscar contratos do usuário',
+            error: error.message
+        });
+        console.error('Erro ao buscar contratos do usuário:', error);
+    } finally {
+        if (client) {
+            await client.end();
+        }
+    }
+}
+
+// Método alternativo se você quiser uma versão mais simples sem agrupamento
+async function buscarContratosPorUsuarioSimples(req, res) {
+    let client;
+
+    try {
+        client = await pool.connect();
+        const { idUsuario } = req.params;
+
+        // Verificar se o usuário existe
+        const usuarioResult = await client.query(
+            'SELECT idUsuario FROM Usuario WHERE idUsuario = $1', 
+            [idUsuario]
+        );
+        if (usuarioResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Usuário não encontrado' });
+        }
+
+        const query = `
+            SELECT 
+                c.idContrato,
+                c.dataInicio,
+                c.dataFim,
+                h.nome as hospedagem_nome,
+                h.idHospedagem,
+                s.descricao as status_descricao,
+                s.idStatus,
+                ARRAY_AGG(DISTINCT p.idPet) as idPets,
+                ARRAY_AGG(DISTINCT p.nome) as pet_nomes
+            FROM Contrato c
+            LEFT JOIN Hospedagem h ON c.idHospedagem = h.idHospedagem
+            LEFT JOIN Status s ON c.idStatus = s.idStatus
+            LEFT JOIN Contrato_Pet cp ON c.idContrato = cp.idContrato
+            LEFT JOIN Pet p ON cp.idPet = p.idPet
+            WHERE c.idUsuario = $1
+            GROUP BY c.idContrato, h.nome, h.idHospedagem, s.descricao, s.idStatus
+            ORDER BY c.dataInicio DESC
+        `;
+
+        const result = await client.query(query, [idUsuario]);
+
+        res.status(200).json(result.rows);
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao buscar contratos do usuário',
+            error: error.message
+        });
+        console.error('Erro ao buscar contratos do usuário:', error);
+    } finally {
+        if (client) {
+            await client.end();
+        }
+    }
+}
+
+// Método para buscar contratos por usuário e status
+async function buscarContratosPorUsuarioEStatus(req, res) {
+    let client;
+
+    try {
+        client = await pool.connect();
+        const { idUsuario, idStatus } = req.query;
+
+        if (!idUsuario) {
+            return res.status(400).json({ message: 'idUsuario é obrigatório' });
+        }
+
+        // Verificar se o usuário existe
+        const usuarioResult = await client.query(
+            'SELECT idUsuario FROM Usuario WHERE idUsuario = $1', 
+            [idUsuario]
+        );
+        if (usuarioResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Usuário não encontrado' });
+        }
+
+        let query = `
+            SELECT 
+                c.idContrato,
+                c.dataInicio,
+                c.dataFim,
+                h.nome as hospedagem_nome,
+                h.idHospedagem,
+                s.descricao as status_descricao,
+                s.idStatus,
+                ARRAY_AGG(DISTINCT p.idPet) as idPets,
+                ARRAY_AGG(DISTINCT p.nome) as pet_nomes
+            FROM Contrato c
+            LEFT JOIN Hospedagem h ON c.idHospedagem = h.idHospedagem
+            LEFT JOIN Status s ON c.idStatus = s.idStatus
+            LEFT JOIN Contrato_Pet cp ON c.idContrato = cp.idContrato
+            LEFT JOIN Pet p ON cp.idPet = p.idPet
+            WHERE c.idUsuario = $1
+        `;
+
+        const values = [idUsuario];
+        let paramCount = 2;
+
+        if (idStatus) {
+            query += ` AND c.idStatus = $${paramCount}`;
+            values.push(idStatus);
+            paramCount++;
+        }
+
+        query += `
+            GROUP BY c.idContrato, h.nome, h.idHospedagem, s.descricao, s.idStatus
+            ORDER BY c.dataInicio DESC
+        `;
+
+        const result = await client.query(query, values);
+
+        res.status(200).json(result.rows);
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao buscar contratos do usuário',
+            error: error.message
+        });
+        console.error('Erro ao buscar contratos do usuário:', error);
+    } finally {
+        if (client) {
+            await client.end();
+        }
+    }
+}
+
 module.exports = {
     lerContratosServico,
     buscarContratoServicoPorId,
     inserirContratoServico,
     atualizarContratoServico,
-    excluirContratoServico
+    excluirContratoServico,
+    buscarContratosPorUsuario,
+    buscarContratosPorUsuarioSimples,
+    buscarContratosPorUsuarioEStatus
 };
