@@ -1,14 +1,13 @@
 // routes/contratoRoutes.js ou similar
 const express = require('express');
 const router = express.Router();
-const contratoController = require('../controllers/contratoController');
+const contratoController = require('../../controllers/contrato/ContratoController');
 
-router.get('/', contratoController.lerContratos);
-router.get('/usuario/:idUsuario', contratoController.buscarContratosPorUsuario);
-router.get('/usuario', contratoController.buscarContratosPorUsuarioEStatus); // Query params: ?idUsuario=X&idStatus=Y
-router.get('/:idContrato', contratoController.buscarContratoPorId);
-router.post('/', contratoController.criarContrato);
-router.put('/:idContrato', contratoController.atualizarContrato);
-router.delete('/:idContrato', contratoController.excluirContrato);
+router.get('/contrato', contratoController.lerContratos);
+router.get('/contrato/usuario/:idUsuario', contratoController.buscarContratosPorUsuario);
+router.get('/contrato/:idContrato', contratoController.buscarContratoPorId);
+router.post('/contrato', contratoController.criarContrato);
+router.put('/contrato/:idContrato', contratoController.atualizarContrato);
+router.delete('/contrato/:idContrato', contratoController.excluirContrato);
 
 module.exports = router;
