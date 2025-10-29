@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const contratoServicoController = require('../../controllers/contrato/ContratoServicoController');  
+const contratoServicoController = require('../../controllers/contrato/ContratoServicoController.js');
 
 router.post('/', contratoServicoController.adicionarServicoContrato);
 router.put('/:idContratoServico', contratoServicoController.atualizarServicoContrato);

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const contratoPetController = require('../../controllers/contrato/ContratoPetController');
+const contratoPetController = require('../../controllers/contrato/ContratoPetController.js');
 
 router.post('/', contratoPetController.adicionarPetContrato);
 router.delete('/:idContratoPet', contratoPetController.removerPetContrato);
