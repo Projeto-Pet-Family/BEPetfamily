@@ -1,23 +1,17 @@
 const pool = require('../../connections/SQLConnections.js');
 
-async function adicionarServicoContrato(req, res) {
+async function adicionarPetContrato(req, res) {
     let client;
 
     try {
         client = await pool.connect();
 
-        const { idContrato, idServico, quantidade = 1 } = req.body;
+        const { idContrato, idPet } = req.body;
 
         // Validações
-        if (!idContrato || !idServico) {
+        if (!idContrato || !idPet) {
             return res.status(400).json({
-                message: 'idContrato e idServico são obrigatórios'
-            });
-        }
-
-        if (quantidade <= 0) {
-            return res.status(400).json({
-                message: 'Quantidade deve ser maior que zero'
+                message: 'idContrato e idPet são obrigatórios'
             });
         }
 
@@ -30,45 +24,43 @@ async function adicionarServicoContrato(req, res) {
             return res.status(404).json({ message: 'Contrato não encontrado' });
         }
 
-        // Verificar se o serviço existe e está ativo
-        const servicoResult = await client.query(
-            'SELECT preco FROM Servico WHERE idServico = $1 AND ativo = true', 
-            [idServico]
+        // Verificar se o pet existe
+        const petResult = await client.query(
+            'SELECT idPet FROM Pet WHERE idPet = $1', 
+            [idPet]
         );
-        if (servicoResult.rows.length === 0) {
-            return res.status(404).json({ message: 'Serviço não encontrado ou inativo' });
+        if (petResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Pet não encontrado' });
         }
 
-        const precoUnitario = servicoResult.rows[0].preco;
-
-        // Verificar se o serviço já está no contrato
+        // Verificar se o pet já está no contrato
         const existeResult = await client.query(
-            'SELECT idcontratoservico FROM contratoservico WHERE idcontrato = $1 AND idservico = $2',
-            [idContrato, idServico]
+            'SELECT idcontrato_pet FROM contrato_pet WHERE idcontrato = $1 AND idpet = $2',
+            [idContrato, idPet]
         );
         if (existeResult.rows.length > 0) {
-            return res.status(400).json({ message: 'Serviço já está adicionado a este contrato' });
+            return res.status(400).json({ message: 'Pet já está adicionado a este contrato' });
         }
 
         // Inserir relação
         const result = await client.query(
-            `INSERT INTO contratoservico (idcontrato, idservico, quantidade, preco_unitario) 
-             VALUES ($1, $2, $3, $4) 
+            `INSERT INTO contrato_pet (idcontrato, idpet) 
+             VALUES ($1, $2) 
              RETURNING *`,
-            [idContrato, idServico, quantidade, precoUnitario]
+            [idContrato, idPet]
         );
 
         res.status(201).json({
-            message: 'Serviço adicionado ao contrato com sucesso',
+            message: 'Pet adicionado ao contrato com sucesso',
             data: result.rows[0]
         });
 
     } catch (error) {
         res.status(500).json({
-            message: 'Erro ao adicionar serviço ao contrato',
+            message: 'Erro ao adicionar pet ao contrato',
             error: error.message
         });
-        console.error('Erro ao adicionar serviço ao contrato:', error);
+        console.error('Erro ao adicionar pet ao contrato:', error);
     } finally {
         if (client) {
             await client.end();
@@ -76,86 +68,35 @@ async function adicionarServicoContrato(req, res) {
     }
 }
 
-async function atualizarServicoContrato(req, res) {
+async function removerPetContrato(req, res) {
     let client;
 
     try {
         client = await pool.connect();
-        const { idContratoServico } = req.params;
-        const { quantidade } = req.body;
-
-        // Validações
-        if (quantidade <= 0) {
-            return res.status(400).json({
-                message: 'Quantidade deve ser maior que zero'
-            });
-        }
+        const { idContratoPet } = req.params;
 
         // Verificar se a relação existe
         const relacaoResult = await client.query(
-            'SELECT * FROM contratoservico WHERE idcontratoservico = $1', 
-            [idContratoServico]
+            'SELECT * FROM contrato_pet WHERE idcontrato_pet = $1', 
+            [idContratoPet]
         );
         if (relacaoResult.rows.length === 0) {
-            return res.status(404).json({ message: 'Relação contrato-serviço não encontrada' });
+            return res.status(404).json({ message: 'Relação contrato-pet não encontrada' });
         }
 
-        // Atualizar quantidade
-        const result = await client.query(
-            `UPDATE contratoservico 
-             SET quantidade = $1, dataatualizacao = CURRENT_TIMESTAMP
-             WHERE idcontratoservico = $2 
-             RETURNING *`,
-            [quantidade, idContratoServico]
-        );
+        await client.query('DELETE FROM contrato_pet WHERE idcontrato_pet = $1', [idContratoPet]);
 
         res.status(200).json({
-            message: 'Serviço do contrato atualizado com sucesso',
-            data: result.rows[0]
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            message: 'Erro ao atualizar serviço do contrato',
-            error: error.message
-        });
-        console.error('Erro ao atualizar serviço do contrato:', error);
-    } finally {
-        if (client) {
-            await client.end();
-        }
-    }
-}
-
-async function removerServicoContrato(req, res) {
-    let client;
-
-    try {
-        client = await pool.connect();
-        const { idContratoServico } = req.params;
-
-        // Verificar se a relação existe
-        const relacaoResult = await client.query(
-            'SELECT * FROM contratoservico WHERE idcontratoservico = $1', 
-            [idContratoServico]
-        );
-        if (relacaoResult.rows.length === 0) {
-            return res.status(404).json({ message: 'Relação contrato-serviço não encontrada' });
-        }
-
-        await client.query('DELETE FROM contratoservico WHERE idcontratoservico = $1', [idContratoServico]);
-
-        res.status(200).json({
-            message: 'Serviço removido do contrato com sucesso',
+            message: 'Pet removido do contrato com sucesso',
             data: relacaoResult.rows[0]
         });
 
     } catch (error) {
         res.status(500).json({
-            message: 'Erro ao remover serviço do contrato',
+            message: 'Erro ao remover pet do contrato',
             error: error.message
         });
-        console.error('Erro ao remover serviço do contrato:', error);
+        console.error('Erro ao remover pet do contrato:', error);
     } finally {
         if (client) {
             await client.end();
@@ -163,7 +104,7 @@ async function removerServicoContrato(req, res) {
     }
 }
 
-async function listarServicosContrato(req, res) {
+async function listarPetsContrato(req, res) {
     let client;
 
     try {
@@ -181,21 +122,17 @@ async function listarServicosContrato(req, res) {
 
         const query = `
             SELECT 
-                cs.idcontratoservico,
-                cs.idcontrato,
-                cs.idservico,
-                cs.quantidade,
-                cs.preco_unitario,
-                cs.datacriacao,
-                cs.dataatualizacao,
-                s.descricao as servico_descricao,
-                s.preco as preco_atual,
-                s.duracao,
-                (cs.quantidade * cs.preco_unitario) as subtotal
-            FROM contratoservico cs
-            JOIN servico s ON cs.idservico = s.idservico
-            WHERE cs.idcontrato = $1
-            ORDER BY s.descricao
+                cp.idcontrato_pet,
+                cp.idcontrato,
+                cp.idpet,
+                cp.datacriacao,
+                p.nome as pet_nome,
+                p.sexo,
+                p.nascimento
+            FROM contrato_pet cp
+            JOIN pet p ON cp.idpet = p.idpet
+            WHERE cp.idcontrato = $1
+            ORDER BY p.nome
         `;
 
         const result = await client.query(query, [idContrato]);
@@ -204,10 +141,10 @@ async function listarServicosContrato(req, res) {
 
     } catch (error) {
         res.status(500).json({
-            message: 'Erro ao listar serviços do contrato',
+            message: 'Erro ao listar pets do contrato',
             error: error.message
         });
-        console.error('Erro ao listar serviços do contrato:', error);
+        console.error('Erro ao listar pets do contrato:', error);
     } finally {
         if (client) {
             await client.end();
@@ -216,8 +153,7 @@ async function listarServicosContrato(req, res) {
 }
 
 module.exports = {
-    adicionarServicoContrato,
-    atualizarServicoContrato,
-    removerServicoContrato,
-    listarServicosContrato
+    adicionarPetContrato,
+    removerPetContrato,
+    listarPetsContrato
 };
