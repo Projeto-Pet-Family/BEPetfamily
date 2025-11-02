@@ -79,9 +79,9 @@ async function inserirPet(req, res) {
         const { idusuario, idporte, idespecie, idraca, nome, sexo, nascimento } = req.body;
 
         // Validação básica dos campos obrigatórios
-        if (!nome || !sexo || !idusuario || !idporte || !idespecie || !idraca) {
+        if (!idusuario || !nome || !sexo || !idusuario || !idporte || !idespecie || !idraca) {
             return res.status(400).json({
-                message: 'Nome, sexo, idusuario, idporte, idespecie e idraca são campos obrigatórios'
+                message: 'idusuario, nome, sexo, idusuario, idporte, idespecie e idraca são campos obrigatórios'
             });
         }
 
