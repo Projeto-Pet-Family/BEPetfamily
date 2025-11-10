@@ -3,9 +3,9 @@ const { Pool } = require('pg');
 const connectionString = 'postgresql://neondb_owner:npg_FdYvOjbx51CX@ep-lingering-wave-ae8v6e5a-pooler.c-2.us-east-2.aws.neon.tech/petfamily?sslmode=require&channel_binding=require';
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: connectionString,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-  connectionTimeoutMillis: 10000,
+  connectionTimeoutMillis: 10000, // 10 segundos
   idleTimeoutMillis: 30000,
   max: 20
 });
