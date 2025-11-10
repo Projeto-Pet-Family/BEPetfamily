@@ -1,5 +1,106 @@
 const pool = require('../../connections/SQLConnections.js');
 
+// Função auxiliar para buscar contrato com todos os relacionamentos
+async function buscarContratoComRelacionamentos(client, idContrato) {
+    try {
+        // Buscar contrato básico
+        const contratoQuery = `
+            SELECT 
+                c.*, 
+                h.nome as hospedagem_nome, 
+                h.endereco as hospedagem_endereco,
+                h.telefone as hospedagem_telefone,
+                u.nome as usuario_nome,
+                u.email as usuario_email,
+                u.telefone as usuario_telefone
+            FROM contrato c
+            LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+            LEFT JOIN usuario u ON c.idusuario = u.idusuario
+            WHERE c.idcontrato = $1
+        `;
+        
+        const contratoResult = await client.query(contratoQuery, [idContrato]);
+        const contrato = contratoResult.rows[0];
+
+        if (!contrato) {
+            return null;
+        }
+
+        // Buscar pets do contrato
+        const petsQuery = `
+            SELECT 
+                cp.idcontrato_pet,
+                p.idpet,
+                p.nome,
+                p.raca,
+                p.sexo,
+                p.nascimento,
+                p.peso,
+                p.observacoes
+            FROM contrato_pet cp
+            JOIN pet p ON cp.idpet = p.idpet
+            WHERE cp.idcontrato = $1
+        `;
+        
+        const petsResult = await client.query(petsQuery, [idContrato]);
+        contrato.pets = petsResult.rows;
+
+        // Buscar serviços do contrato
+        const servicosQuery = `
+            SELECT 
+                cs.idcontratoservico,
+                cs.idservico,
+                cs.quantidade,
+                cs.preco_unitario,
+                s.descricao,
+                s.tipo_servico,
+                s.duracao_minutos,
+                s.observacoes,
+                s.preco as preco_atual,
+                (cs.quantidade * cs.preco_unitario) as subtotal
+            FROM contratoservico cs
+            JOIN servico s ON cs.idservico = s.idservico
+            WHERE cs.idcontrato = $1
+            ORDER BY s.descricao
+        `;
+        
+        const servicosResult = await client.query(servicosQuery, [idContrato]);
+        contrato.servicos = servicosResult.rows;
+
+        // Calcular totais
+        contrato.total_servicos = contrato.servicos.reduce((total, servico) => 
+            total + parseFloat(servico.subtotal || 0), 0
+        );
+
+        // Formatar status para português
+        const statusMap = {
+            'em_aprovacao': 'Em aprovação',
+            'aprovado': 'Aprovado',
+            'em_execucao': 'Em execução',
+            'concluido': 'Concluído',
+            'negado': 'Negado',
+            'cancelado': 'Cancelado'
+        };
+        contrato.status_descricao = statusMap[contrato.status] || 'Desconhecido';
+
+        // Calcular duração do contrato em dias
+        if (contrato.datainicio && contrato.datafim) {
+            const inicio = new Date(contrato.datainicio);
+            const fim = new Date(contrato.datafim);
+            const diffTime = Math.abs(fim - inicio);
+            contrato.duracao_dias = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        } else {
+            contrato.duracao_dias = null;
+        }
+
+        return contrato;
+    } catch (error) {
+        console.error('Erro ao buscar contrato com relacionamentos:', error);
+        throw error;
+    }
+}
+
+// Listar todos os contratos
 async function lerContratos(req, res) {
     let client;
 
@@ -13,9 +114,18 @@ async function lerContratos(req, res) {
             FROM Contrato c
             LEFT JOIN Hospedagem h ON c.idHospedagem = h.idHospedagem
             LEFT JOIN Usuario u ON c.idUsuario = u.idUsuario
+            ORDER BY c.dataCriacao DESC
         `;
         const result = await client.query(query);
-        res.status(200).json(result.rows);
+        
+        // Buscar pets e serviços para cada contrato
+        const contratosCompletos = await Promise.all(
+            result.rows.map(async (contrato) => {
+                return await buscarContratoComRelacionamentos(client, contrato.idcontrato);
+            })
+        );
+
+        res.status(200).json(contratosCompletos);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao listar contratos',
@@ -24,11 +134,12 @@ async function lerContratos(req, res) {
         console.error('Erro ao listar contratos:', error);
     } finally {
         if (client) {
-            await client.end();
+            await client.release();
         }
     }
 }
 
+// Buscar contrato por ID
 async function buscarContratoPorId(req, res) {
     let client;
 
@@ -36,24 +147,13 @@ async function buscarContratoPorId(req, res) {
         client = await pool.connect();
         const { idContrato } = req.params;
 
-        const query = `
-            SELECT 
-                c.*, 
-                h.nome as hospedagem_nome, 
-                u.nome as usuario_nome
-            FROM Contrato c
-            LEFT JOIN Hospedagem h ON c.idHospedagem = h.idHospedagem
-            LEFT JOIN Usuario u ON c.idUsuario = u.idUsuario
-            WHERE c.idContrato = $1
-        `;
+        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
 
-        const result = await client.query(query, [idContrato]);
-
-        if (result.rows.length === 0) {
+        if (!contratoCompleto) {
             return res.status(404).json({ message: 'Contrato não encontrado' });
         }
 
-        res.status(200).json(result.rows[0]);
+        res.status(200).json(contratoCompleto);
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao buscar contrato',
@@ -62,12 +162,12 @@ async function buscarContratoPorId(req, res) {
         console.error('Erro ao buscar contrato:', error);
     } finally {
         if (client) {
-            await client.end();
+            await client.release();
         }
     }
 }
 
-// controllers/contrato/ContratoController.js
+// Criar novo contrato
 async function criarContrato(req, res) {
     let client;
 
@@ -264,7 +364,9 @@ async function criarContrato(req, res) {
 
     } catch (error) {
         // Rollback em caso de erro
-        await client.query('ROLLBACK');
+        if (client) {
+            await client.query('ROLLBACK');
+        }
         
         console.error('❌ Erro ao criar contrato:', error);
         res.status(500).json({
@@ -278,6 +380,7 @@ async function criarContrato(req, res) {
     }
 }
 
+// Atualizar contrato
 async function atualizarContrato(req, res) {
     let client;
 
@@ -395,9 +498,12 @@ async function atualizarContrato(req, res) {
 
         const result = await client.query(query, values);
 
+        // Buscar contrato completo atualizado
+        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
+
         res.status(200).json({
             message: 'Contrato atualizado com sucesso',
-            data: result.rows[0]
+            data: contratoCompleto
         });
 
     } catch (error) {
@@ -408,11 +514,12 @@ async function atualizarContrato(req, res) {
         console.error('Erro ao atualizar contrato:', error);
     } finally {
         if (client) {
-            await client.end();
+            await client.release();
         }
     }
 }
 
+// Atualizar apenas o status do contrato
 async function atualizarStatusContrato(req, res) {
     let client;
 
@@ -447,9 +554,12 @@ async function atualizarStatusContrato(req, res) {
             [status, idContrato]
         );
 
+        // Buscar contrato completo atualizado
+        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
+
         res.status(200).json({
             message: 'Status do contrato atualizado com sucesso',
-            data: result.rows[0]
+            data: contratoCompleto
         });
 
     } catch (error) {
@@ -460,11 +570,12 @@ async function atualizarStatusContrato(req, res) {
         console.error('Erro ao atualizar status do contrato:', error);
     } finally {
         if (client) {
-            await client.end();
+            await client.release();
         }
     }
 }
 
+// Excluir contrato
 async function excluirContrato(req, res) {
     let client;
 
@@ -481,11 +592,14 @@ async function excluirContrato(req, res) {
             return res.status(404).json({ message: 'Contrato não encontrado' });
         }
 
+        // Buscar dados completos antes de excluir para retornar na resposta
+        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
+
         await client.query('DELETE FROM Contrato WHERE idContrato = $1', [idContrato]);
 
         res.status(200).json({
             message: 'Contrato excluído com sucesso',
-            data: contratoResult.rows[0]
+            data: contratoCompleto
         });
 
     } catch (error) {
@@ -503,11 +617,12 @@ async function excluirContrato(req, res) {
         console.error('Erro ao excluir contrato:', error);
     } finally {
         if (client) {
-            await client.end();
+            await client.release();
         }
     }
 }
 
+// Buscar contratos por usuário
 async function buscarContratosPorUsuario(req, res) {
     let client;
 
@@ -543,24 +658,14 @@ async function buscarContratosPorUsuario(req, res) {
 
         const result = await client.query(query, [idUsuario]);
 
-        // Formatar o status para português
-        const contratosFormatados = result.rows.map(contrato => {
-            const statusMap = {
-                'em_aprovacao': 'Em aprovação',
-                'aprovado': 'Aprovado',
-                'em_execucao': 'Em execução',
-                'concluido': 'Concluído',
-                'negado': 'Negado',
-                'cancelado': 'Cancelado'
-            };
+        // Buscar pets e serviços para cada contrato
+        const contratosCompletos = await Promise.all(
+            result.rows.map(async (contrato) => {
+                return await buscarContratoComRelacionamentos(client, contrato.idcontrato);
+            })
+        );
 
-            return {
-                ...contrato,
-                status_descricao: statusMap[contrato.status] || 'Desconhecido'
-            };
-        });
-
-        res.status(200).json(contratosFormatados);
+        res.status(200).json(contratosCompletos);
 
     } catch (error) {
         res.status(500).json({
@@ -570,11 +675,12 @@ async function buscarContratosPorUsuario(req, res) {
         console.error('Erro ao buscar contratos do usuário:', error);
     } finally {
         if (client) {
-            await client.end();
+            await client.release();
         }
     }
 }
 
+// Buscar contratos por usuário e status
 async function buscarContratosPorUsuarioEStatus(req, res) {
     let client;
 
@@ -632,24 +738,14 @@ async function buscarContratosPorUsuarioEStatus(req, res) {
 
         const result = await client.query(query, values);
 
-        // Formatar o status para português
-        const contratosFormatados = result.rows.map(contrato => {
-            const statusMap = {
-                'em_aprovacao': 'Em aprovação',
-                'aprovado': 'Aprovado',
-                'em_execucao': 'Em execução',
-                'concluido': 'Concluído',
-                'negado': 'Negado',
-                'cancelado': 'Cancelado'
-            };
+        // Buscar pets e serviços para cada contrato
+        const contratosCompletos = await Promise.all(
+            result.rows.map(async (contrato) => {
+                return await buscarContratoComRelacionamentos(client, contrato.idcontrato);
+            })
+        );
 
-            return {
-                ...contrato,
-                status_descricao: statusMap[contrato.status] || 'Desconhecido'
-            };
-        });
-
-        res.status(200).json(contratosFormatados);
+        res.status(200).json(contratosCompletos);
 
     } catch (error) {
         res.status(500).json({
@@ -659,84 +755,9 @@ async function buscarContratosPorUsuarioEStatus(req, res) {
         console.error('Erro ao buscar contratos do usuário:', error);
     } finally {
         if (client) {
-            await client.end();
+            await client.release();
         }
     }
-}
-
-// Adicione esta função ao ContratoController.js
-async function buscarContratoComRelacionamentos(client, idContrato) {
-    // Buscar contrato básico
-    const contratoQuery = `
-        SELECT 
-            c.*, 
-            h.nome as hospedagem_nome, 
-            u.nome as usuario_nome
-        FROM contrato c
-        LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
-        LEFT JOIN usuario u ON c.idusuario = u.idusuario
-        WHERE c.idcontrato = $1
-    `;
-    
-    const contratoResult = await client.query(contratoQuery, [idContrato]);
-    const contrato = contratoResult.rows[0];
-
-    if (!contrato) {
-        return null;
-    }
-
-    // Buscar pets do contrato
-    const petsQuery = `
-        SELECT 
-            cp.idcontrato_pet,
-            p.idpet,
-            p.nome,
-            p.sexo,
-            p.nascimento
-        FROM contrato_pet cp
-        JOIN pet p ON cp.idpet = p.idpet
-        WHERE cp.idcontrato = $1
-    `;
-    
-    const petsResult = await client.query(petsQuery, [idContrato]);
-    contrato.pets = petsResult.rows;
-
-    // Buscar serviços do contrato
-    const servicosQuery = `
-        SELECT 
-            cs.idcontratoservico,
-            cs.idservico,
-            cs.quantidade,
-            cs.preco_unitario,
-            s.descricao,
-            s.preco as preco_atual,
-            s.duracao,
-            (cs.quantidade * cs.preco_unitario) as subtotal
-        FROM contratoservico cs
-        JOIN servico s ON cs.idservico = s.idservico
-        WHERE cs.idcontrato = $1
-    `;
-    
-    const servicosResult = await client.query(servicosQuery, [idContrato]);
-    contrato.servicos = servicosResult.rows;
-
-    // Calcular totais
-    contrato.total_servicos = contrato.servicos.reduce((total, servico) => 
-        total + parseFloat(servico.subtotal), 0
-    );
-
-    // Formatar status para português
-    const statusMap = {
-        'em_aprovacao': 'Em aprovação',
-        'aprovado': 'Aprovado',
-        'em_execucao': 'Em execução',
-        'concluido': 'Concluído',
-        'negado': 'Negado',
-        'cancelado': 'Cancelado'
-    };
-    contrato.status_descricao = statusMap[contrato.status] || 'Desconhecido';
-
-    return contrato;
 }
 
 module.exports = {
