@@ -3,12 +3,12 @@ const { Pool } = require('pg');
 const connectionString = 'postgresql://neondb_owner:npg_FdYvOjbx51CX@ep-lingering-wave-ae8v6e5a-pooler.c-2.us-east-2.aws.neon.tech/petfamily?sslmode=require&channel_binding=require';
 
 const pool = new Pool({
-  connectionString: connectionString,
-  max: 20,
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  max: 20
 });
-
 pool.on('connect', () => {
   console.log('Conectado ao PostgreSQL Neon');
 });
