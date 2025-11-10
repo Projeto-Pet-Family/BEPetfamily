@@ -3,16 +3,13 @@ const pool = require('../../connections/SQLConnections.js');
 // Função auxiliar para buscar contrato com todos os relacionamentos
 async function buscarContratoComRelacionamentos(client, idContrato) {
     try {
-        // Buscar contrato básico
+        // Buscar contrato básico - usando apenas colunas que existem
         const contratoQuery = `
             SELECT 
                 c.*, 
                 h.nome as hospedagem_nome, 
-                h.endereco as hospedagem_endereco,
-                h.telefone as hospedagem_telefone,
                 u.nome as usuario_nome,
-                u.email as usuario_email,
-                u.telefone as usuario_telefone
+                u.email as usuario_email
             FROM contrato c
             LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
             LEFT JOIN usuario u ON c.idusuario = u.idusuario
@@ -26,17 +23,14 @@ async function buscarContratoComRelacionamentos(client, idContrato) {
             return null;
         }
 
-        // Buscar pets do contrato
+        // Buscar pets do contrato - apenas colunas que existem
         const petsQuery = `
             SELECT 
                 cp.idcontrato_pet,
                 p.idpet,
                 p.nome,
-                p.raca,
                 p.sexo,
-                p.nascimento,
-                p.peso,
-                p.observacoes
+                p.nascimento
             FROM contrato_pet cp
             JOIN pet p ON cp.idpet = p.idpet
             WHERE cp.idcontrato = $1
@@ -45,7 +39,7 @@ async function buscarContratoComRelacionamentos(client, idContrato) {
         const petsResult = await client.query(petsQuery, [idContrato]);
         contrato.pets = petsResult.rows;
 
-        // Buscar serviços do contrato
+        // Buscar serviços do contrato - apenas colunas que existem
         const servicosQuery = `
             SELECT 
                 cs.idcontratoservico,
@@ -53,9 +47,6 @@ async function buscarContratoComRelacionamentos(client, idContrato) {
                 cs.quantidade,
                 cs.preco_unitario,
                 s.descricao,
-                s.tipo_servico,
-                s.duracao_minutos,
-                s.observacoes,
                 s.preco as preco_atual,
                 (cs.quantidade * cs.preco_unitario) as subtotal
             FROM contratoservico cs
