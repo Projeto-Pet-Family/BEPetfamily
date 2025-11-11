@@ -1,17 +1,56 @@
 const pool = require('../../connections/SQLConnections.js');
 
+// Função auxiliar para formatar endereço completo
+function formatarEndereco(contrato) {
+    const enderecoParts = [];
+    
+    if (contrato.hospedagem_logradouro) {
+        enderecoParts.push(contrato.hospedagem_logradouro);
+    }
+    if (contrato.hospedagem_numero) {
+        enderecoParts.push(contrato.hospedagem_numero);
+    }
+    if (contrato.hospedagem_complemento) {
+        enderecoParts.push(contrato.hospedagem_complemento);
+    }
+    if (contrato.hospedagem_bairro) {
+        enderecoParts.push(contrato.hospedagem_bairro);
+    }
+    if (contrato.hospedagem_cidade) {
+        enderecoParts.push(contrato.hospedagem_cidade);
+    }
+    if (contrato.hospedagem_estado) {
+        enderecoParts.push(contrato.hospedagem_estado);
+    }
+    if (contrato.hospedagem_cep) {
+        enderecoParts.push(`CEP: ${contrato.hospedagem_cep}`);
+    }
+    
+    return enderecoParts.join(', ');
+}
+
 // Função auxiliar para buscar contrato com todos os relacionamentos
 async function buscarContratoComRelacionamentos(client, idContrato) {
     try {
-        // Buscar contrato básico - usando apenas colunas que existem
+        // Buscar contrato básico - incluindo dados do endereço da hospedagem
         const contratoQuery = `
             SELECT 
                 c.*, 
-                h.nome as hospedagem_nome, 
+                h.nome as hospedagem_nome,
+                h.telefone as hospedagem_telefone,
+                h.email as hospedagem_email,
+                e.logradouro as hospedagem_logradouro,
+                e.numero as hospedagem_numero,
+                e.complemento as hospedagem_complemento,
+                e.bairro as hospedagem_bairro,
+                e.cidade as hospedagem_cidade,
+                e.estado as hospedagem_estado,
+                e.cep as hospedagem_cep,
                 u.nome as usuario_nome,
                 u.email as usuario_email
             FROM contrato c
             LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+            LEFT JOIN endereco e ON h.idendereco = e.idendereco
             LEFT JOIN usuario u ON c.idusuario = u.idusuario
             WHERE c.idcontrato = $1
         `;
@@ -22,6 +61,9 @@ async function buscarContratoComRelacionamentos(client, idContrato) {
         if (!contrato) {
             return null;
         }
+
+        // Formatar endereço completo da hospedagem
+        contrato.hospedagem_endereco = formatarEndereco(contrato);
 
         // Buscar pets do contrato - apenas colunas que existem
         const petsQuery = `
@@ -100,19 +142,30 @@ async function lerContratos(req, res) {
         const query = `
             SELECT 
                 c.*, 
-                h.nome as hospedagem_nome, 
+                h.nome as hospedagem_nome,
+                h.telefone as hospedagem_telefone,
+                h.email as hospedagem_email,
+                e.logradouro as hospedagem_logradouro,
+                e.numero as hospedagem_numero,
+                e.complemento as hospedagem_complemento,
+                e.bairro as hospedagem_bairro,
+                e.cidade as hospedagem_cidade,
+                e.estado as hospedagem_estado,
+                e.cep as hospedagem_cep,
                 u.nome as usuario_nome
-            FROM Contrato c
-            LEFT JOIN Hospedagem h ON c.idHospedagem = h.idHospedagem
-            LEFT JOIN Usuario u ON c.idUsuario = u.idUsuario
-            ORDER BY c.dataCriacao DESC
+            FROM contrato c
+            LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+            LEFT JOIN endereco e ON h.idendereco = e.idendereco
+            LEFT JOIN usuario u ON c.idusuario = u.idusuario
+            ORDER BY c.datacriacao DESC
         `;
         const result = await client.query(query);
         
         // Buscar pets e serviços para cada contrato
         const contratosCompletos = await Promise.all(
             result.rows.map(async (contrato) => {
-                return await buscarContratoComRelacionamentos(client, contrato.idcontrato);
+                const contratoCompleto = await buscarContratoComRelacionamentos(client, contrato.idcontrato);
+                return contratoCompleto;
             })
         );
 
@@ -389,7 +442,7 @@ async function atualizarContrato(req, res) {
 
         // Verificar se o contrato existe
         const contratoResult = await client.query(
-            'SELECT * FROM Contrato WHERE idContrato = $1', 
+            'SELECT * FROM contrato WHERE idcontrato = $1', 
             [idContrato]
         );
         if (contratoResult.rows.length === 0) {
@@ -421,7 +474,7 @@ async function atualizarContrato(req, res) {
         // Verificar entidades relacionadas se fornecidas
         if (idHospedagem) {
             const hospedagemResult = await client.query(
-                'SELECT idHospedagem FROM Hospedagem WHERE idHospedagem = $1', 
+                'SELECT idhospedagem FROM hospedagem WHERE idhospedagem = $1', 
                 [idHospedagem]
             );
             if (hospedagemResult.rows.length === 0) {
@@ -431,7 +484,7 @@ async function atualizarContrato(req, res) {
 
         if (idUsuario) {
             const usuarioResult = await client.query(
-                'SELECT idUsuario FROM Usuario WHERE idUsuario = $1', 
+                'SELECT idusuario FROM usuario WHERE idusuario = $1', 
                 [idUsuario]
             );
             if (usuarioResult.rows.length === 0) {
@@ -445,12 +498,12 @@ async function atualizarContrato(req, res) {
         let paramCount = 1;
 
         if (idHospedagem !== undefined) {
-            updateFields.idHospedagem = `$${paramCount}`;
+            updateFields.idhospedagem = `$${paramCount}`;
             values.push(idHospedagem);
             paramCount++;
         }
         if (idUsuario !== undefined) {
-            updateFields.idUsuario = `$${paramCount}`;
+            updateFields.idusuario = `$${paramCount}`;
             values.push(idUsuario);
             paramCount++;
         }
@@ -460,12 +513,12 @@ async function atualizarContrato(req, res) {
             paramCount++;
         }
         if (dataInicio) {
-            updateFields.dataInicio = `$${paramCount}`;
+            updateFields.datainicio = `$${paramCount}`;
             values.push(dataInicio);
             paramCount++;
         }
         if (dataFim !== undefined) {
-            updateFields.dataFim = `$${paramCount}`;
+            updateFields.datafim = `$${paramCount}`;
             values.push(dataFim);
             paramCount++;
         }
@@ -481,9 +534,9 @@ async function atualizarContrato(req, res) {
         values.push(idContrato);
 
         const query = `
-            UPDATE Contrato 
+            UPDATE contrato 
             SET ${setClauses} 
-            WHERE idContrato = $${paramCount} 
+            WHERE idcontrato = $${paramCount} 
             RETURNING *
         `;
 
@@ -529,7 +582,7 @@ async function atualizarStatusContrato(req, res) {
 
         // Verificar se o contrato existe
         const contratoResult = await client.query(
-            'SELECT * FROM Contrato WHERE idContrato = $1', 
+            'SELECT * FROM contrato WHERE idcontrato = $1', 
             [idContrato]
         );
         if (contratoResult.rows.length === 0) {
@@ -538,9 +591,9 @@ async function atualizarStatusContrato(req, res) {
 
         // Atualizar apenas o status
         const result = await client.query(
-            `UPDATE Contrato 
-             SET status = $1, dataAtualizacao = CURRENT_TIMESTAMP
-             WHERE idContrato = $2 
+            `UPDATE contrato 
+             SET status = $1, dataatualizacao = CURRENT_TIMESTAMP
+             WHERE idcontrato = $2 
              RETURNING *`,
             [status, idContrato]
         );
@@ -576,7 +629,7 @@ async function excluirContrato(req, res) {
 
         // Verificar se o contrato existe
         const contratoResult = await client.query(
-            'SELECT * FROM Contrato WHERE idContrato = $1', 
+            'SELECT * FROM contrato WHERE idcontrato = $1', 
             [idContrato]
         );
         if (contratoResult.rows.length === 0) {
@@ -586,7 +639,7 @@ async function excluirContrato(req, res) {
         // Buscar dados completos antes de excluir para retornar na resposta
         const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
 
-        await client.query('DELETE FROM Contrato WHERE idContrato = $1', [idContrato]);
+        await client.query('DELETE FROM contrato WHERE idcontrato = $1', [idContrato]);
 
         res.status(200).json({
             message: 'Contrato excluído com sucesso',
@@ -623,7 +676,7 @@ async function buscarContratosPorUsuario(req, res) {
 
         // Verificar se o usuário existe
         const usuarioResult = await client.query(
-            'SELECT idUsuario FROM Usuario WHERE idUsuario = $1', 
+            'SELECT idusuario FROM usuario WHERE idusuario = $1', 
             [idUsuario]
         );
         if (usuarioResult.rows.length === 0) {
@@ -632,19 +685,29 @@ async function buscarContratosPorUsuario(req, res) {
 
         const query = `
             SELECT 
-                c.idContrato,
-                c.idHospedagem,
-                c.idUsuario,
+                c.idcontrato,
+                c.idhospedagem,
+                c.idusuario,
                 c.status,
-                c.dataInicio,
-                c.dataFim,
-                c.dataCriacao,
-                c.dataAtualizacao,
-                h.nome as hospedagem_nome
-            FROM Contrato c
-            LEFT JOIN Hospedagem h ON c.idHospedagem = h.idHospedagem
-            WHERE c.idUsuario = $1
-            ORDER BY c.dataInicio DESC, c.dataCriacao DESC
+                c.datainicio,
+                c.datafim,
+                c.datacriacao,
+                c.dataatualizacao,
+                h.nome as hospedagem_nome,
+                h.telefone as hospedagem_telefone,
+                h.email as hospedagem_email,
+                e.logradouro as hospedagem_logradouro,
+                e.numero as hospedagem_numero,
+                e.complemento as hospedagem_complemento,
+                e.bairro as hospedagem_bairro,
+                e.cidade as hospedagem_cidade,
+                e.estado as hospedagem_estado,
+                e.cep as hospedagem_cep
+            FROM contrato c
+            LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+            LEFT JOIN endereco e ON h.idendereco = e.idendereco
+            WHERE c.idusuario = $1
+            ORDER BY c.datainicio DESC, c.datacriacao DESC
         `;
 
         const result = await client.query(query, [idUsuario]);
@@ -685,7 +748,7 @@ async function buscarContratosPorUsuarioEStatus(req, res) {
 
         // Verificar se o usuário existe
         const usuarioResult = await client.query(
-            'SELECT idUsuario FROM Usuario WHERE idUsuario = $1', 
+            'SELECT idusuario FROM usuario WHERE idusuario = $1', 
             [idUsuario]
         );
         if (usuarioResult.rows.length === 0) {
@@ -694,18 +757,28 @@ async function buscarContratosPorUsuarioEStatus(req, res) {
 
         let query = `
             SELECT 
-                c.idContrato,
-                c.idHospedagem,
-                c.idUsuario,
+                c.idcontrato,
+                c.idhospedagem,
+                c.idusuario,
                 c.status,
-                c.dataInicio,
-                c.dataFim,
-                c.dataCriacao,
-                c.dataAtualizacao,
-                h.nome as hospedagem_nome
-            FROM Contrato c
-            LEFT JOIN Hospedagem h ON c.idHospedagem = h.idHospedagem
-            WHERE c.idUsuario = $1
+                c.datainicio,
+                c.datafim,
+                c.datacriacao,
+                c.dataatualizacao,
+                h.nome as hospedagem_nome,
+                h.telefone as hospedagem_telefone,
+                h.email as hospedagem_email,
+                e.logradouro as hospedagem_logradouro,
+                e.numero as hospedagem_numero,
+                e.complemento as hospedagem_complemento,
+                e.bairro as hospedagem_bairro,
+                e.cidade as hospedagem_cidade,
+                e.estado as hospedagem_estado,
+                e.cep as hospedagem_cep
+            FROM contrato c
+            LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+            LEFT JOIN endereco e ON h.idendereco = e.idendereco
+            WHERE c.idusuario = $1
         `;
 
         const values = [idUsuario];
@@ -725,7 +798,7 @@ async function buscarContratosPorUsuarioEStatus(req, res) {
             paramCount++;
         }
 
-        query += ` ORDER BY c.dataInicio DESC, c.dataCriacao DESC`;
+        query += ` ORDER BY c.datainicio DESC, c.datacriacao DESC`;
 
         const result = await client.query(query, values);
 
