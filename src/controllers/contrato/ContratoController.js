@@ -1,29 +1,29 @@
 const pool = require('../../connections/SQLConnections.js');
 
-// Função auxiliar para formatar endereço completo
+// Função auxiliar para formatar endereço completo com a nova estrutura
 function formatarEndereco(contrato) {
     const enderecoParts = [];
     
-    if (contrato.hospedagem_logradouro) {
-        enderecoParts.push(contrato.hospedagem_logradouro);
+    if (contrato.logradouro_nome) {
+        enderecoParts.push(contrato.logradouro_nome);
     }
-    if (contrato.hospedagem_numero) {
-        enderecoParts.push(contrato.hospedagem_numero);
+    if (contrato.endereco_numero) {
+        enderecoParts.push(contrato.endereco_numero.toString());
     }
-    if (contrato.hospedagem_complemento) {
-        enderecoParts.push(contrato.hospedagem_complemento);
+    if (contrato.endereco_complemento) {
+        enderecoParts.push(contrato.endereco_complemento);
     }
-    if (contrato.hospedagem_bairro) {
-        enderecoParts.push(contrato.hospedagem_bairro);
+    if (contrato.bairro_nome) {
+        enderecoParts.push(contrato.bairro_nome);
     }
-    if (contrato.hospedagem_cidade) {
-        enderecoParts.push(contrato.hospedagem_cidade);
+    if (contrato.cidade_nome) {
+        enderecoParts.push(contrato.cidade_nome);
     }
-    if (contrato.hospedagem_estado) {
-        enderecoParts.push(contrato.hospedagem_estado);
+    if (contrato.estado_sigla) {
+        enderecoParts.push(contrato.estado_sigla);
     }
-    if (contrato.hospedagem_cep) {
-        enderecoParts.push(`CEP: ${contrato.hospedagem_cep}`);
+    if (contrato.cep_codigo) {
+        enderecoParts.push(`CEP: ${contrato.cep_codigo}`);
     }
     
     return enderecoParts.join(', ');
@@ -32,25 +32,32 @@ function formatarEndereco(contrato) {
 // Função auxiliar para buscar contrato com todos os relacionamentos
 async function buscarContratoComRelacionamentos(client, idContrato) {
     try {
-        // Buscar contrato básico - incluindo dados do endereço da hospedagem
+        // Buscar contrato básico - incluindo dados do endereço da hospedagem com nova estrutura
         const contratoQuery = `
             SELECT 
                 c.*, 
                 h.nome as hospedagem_nome,
                 h.telefone as hospedagem_telefone,
                 h.email as hospedagem_email,
-                e.logradouro as hospedagem_logradouro,
-                e.numero as hospedagem_numero,
-                e.complemento as hospedagem_complemento,
-                e.bairro as hospedagem_bairro,
-                e.cidade as hospedagem_cidade,
-                e.estado as hospedagem_estado,
-                e.cep as hospedagem_cep,
+                e.idendereco,
+                e.numero as endereco_numero,
+                e.complemento as endereco_complemento,
+                l.nome as logradouro_nome,
+                b.nome as bairro_nome,
+                ci.nome as cidade_nome,
+                es.nome as estado_nome,
+                es.sigla as estado_sigla,
+                cep.codigo as cep_codigo,
                 u.nome as usuario_nome,
                 u.email as usuario_email
             FROM contrato c
             LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
             LEFT JOIN endereco e ON h.idendereco = e.idendereco
+            LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
+            LEFT JOIN bairro b ON l.idbairro = b.idbairro
+            LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
+            LEFT JOIN estado es ON ci.idestado = es.idestado
+            LEFT JOIN cep ON e.idcep = cep.idcep
             LEFT JOIN usuario u ON c.idusuario = u.idusuario
             WHERE c.idcontrato = $1
         `;
@@ -65,7 +72,7 @@ async function buscarContratoComRelacionamentos(client, idContrato) {
         // Formatar endereço completo da hospedagem
         contrato.hospedagem_endereco = formatarEndereco(contrato);
 
-        // Buscar pets do contrato - apenas colunas que existem
+        // Buscar pets do contrato
         const petsQuery = `
             SELECT 
                 cp.idcontrato_pet,
@@ -81,7 +88,7 @@ async function buscarContratoComRelacionamentos(client, idContrato) {
         const petsResult = await client.query(petsQuery, [idContrato]);
         contrato.pets = petsResult.rows;
 
-        // Buscar serviços do contrato - apenas colunas que existem
+        // Buscar serviços do contrato
         const servicosQuery = `
             SELECT 
                 cs.idcontratoservico,
@@ -145,27 +152,38 @@ async function lerContratos(req, res) {
                 h.nome as hospedagem_nome,
                 h.telefone as hospedagem_telefone,
                 h.email as hospedagem_email,
-                e.logradouro as hospedagem_logradouro,
-                e.numero as hospedagem_numero,
-                e.complemento as hospedagem_complemento,
-                e.bairro as hospedagem_bairro,
-                e.cidade as hospedagem_cidade,
-                e.estado as hospedagem_estado,
-                e.cep as hospedagem_cep,
+                e.numero as endereco_numero,
+                e.complemento as endereco_complemento,
+                l.nome as logradouro_nome,
+                b.nome as bairro_nome,
+                ci.nome as cidade_nome,
+                es.nome as estado_nome,
+                es.sigla as estado_sigla,
+                cep.codigo as cep_codigo,
                 u.nome as usuario_nome
             FROM contrato c
             LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
             LEFT JOIN endereco e ON h.idendereco = e.idendereco
+            LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
+            LEFT JOIN bairro b ON l.idbairro = b.idbairro
+            LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
+            LEFT JOIN estado es ON ci.idestado = es.idestado
+            LEFT JOIN cep ON e.idcep = cep.idcep
             LEFT JOIN usuario u ON c.idusuario = u.idusuario
             ORDER BY c.datacriacao DESC
         `;
         const result = await client.query(query);
         
+        // Formatar endereço para cada contrato
+        const contratosComEndereco = result.rows.map(contrato => {
+            contrato.hospedagem_endereco = formatarEndereco(contrato);
+            return contrato;
+        });
+
         // Buscar pets e serviços para cada contrato
         const contratosCompletos = await Promise.all(
-            result.rows.map(async (contrato) => {
-                const contratoCompleto = await buscarContratoComRelacionamentos(client, contrato.idcontrato);
-                return contratoCompleto;
+            contratosComEndereco.map(async (contrato) => {
+                return await buscarContratoComRelacionamentos(client, contrato.idcontrato);
             })
         );
 
@@ -694,27 +712,37 @@ async function buscarContratosPorUsuario(req, res) {
                 c.datacriacao,
                 c.dataatualizacao,
                 h.nome as hospedagem_nome,
-                h.telefone as hospedagem_telefone,
-                h.email as hospedagem_email,
-                e.logradouro as hospedagem_logradouro,
-                e.numero as hospedagem_numero,
-                e.complemento as hospedagem_complemento,
-                e.bairro as hospedagem_bairro,
-                e.cidade as hospedagem_cidade,
-                e.estado as hospedagem_estado,
-                e.cep as hospedagem_cep
+                e.numero as endereco_numero,
+                e.complemento as endereco_complemento,
+                l.nome as logradouro_nome,
+                b.nome as bairro_nome,
+                ci.nome as cidade_nome,
+                es.nome as estado_nome,
+                es.sigla as estado_sigla,
+                cep.codigo as cep_codigo
             FROM contrato c
             LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
             LEFT JOIN endereco e ON h.idendereco = e.idendereco
+            LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
+            LEFT JOIN bairro b ON l.idbairro = b.idbairro
+            LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
+            LEFT JOIN estado es ON ci.idestado = es.idestado
+            LEFT JOIN cep ON e.idcep = cep.idcep
             WHERE c.idusuario = $1
             ORDER BY c.datainicio DESC, c.datacriacao DESC
         `;
 
         const result = await client.query(query, [idUsuario]);
 
+        // Formatar endereço para cada contrato
+        const contratosComEndereco = result.rows.map(contrato => {
+            contrato.hospedagem_endereco = formatarEndereco(contrato);
+            return contrato;
+        });
+
         // Buscar pets e serviços para cada contrato
         const contratosCompletos = await Promise.all(
-            result.rows.map(async (contrato) => {
+            contratosComEndereco.map(async (contrato) => {
                 return await buscarContratoComRelacionamentos(client, contrato.idcontrato);
             })
         );
@@ -766,18 +794,22 @@ async function buscarContratosPorUsuarioEStatus(req, res) {
                 c.datacriacao,
                 c.dataatualizacao,
                 h.nome as hospedagem_nome,
-                h.telefone as hospedagem_telefone,
-                h.email as hospedagem_email,
-                e.logradouro as hospedagem_logradouro,
-                e.numero as hospedagem_numero,
-                e.complemento as hospedagem_complemento,
-                e.bairro as hospedagem_bairro,
-                e.cidade as hospedagem_cidade,
-                e.estado as hospedagem_estado,
-                e.cep as hospedagem_cep
+                e.numero as endereco_numero,
+                e.complemento as endereco_complemento,
+                l.nome as logradouro_nome,
+                b.nome as bairro_nome,
+                ci.nome as cidade_nome,
+                es.nome as estado_nome,
+                es.sigla as estado_sigla,
+                cep.codigo as cep_codigo
             FROM contrato c
             LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
             LEFT JOIN endereco e ON h.idendereco = e.idendereco
+            LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
+            LEFT JOIN bairro b ON l.idbairro = b.idbairro
+            LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
+            LEFT JOIN estado es ON ci.idestado = es.idestado
+            LEFT JOIN cep ON e.idcep = cep.idcep
             WHERE c.idusuario = $1
         `;
 
@@ -802,9 +834,15 @@ async function buscarContratosPorUsuarioEStatus(req, res) {
 
         const result = await client.query(query, values);
 
+        // Formatar endereço para cada contrato
+        const contratosComEndereco = result.rows.map(contrato => {
+            contrato.hospedagem_endereco = formatarEndereco(contrato);
+            return contrato;
+        });
+
         // Buscar pets e serviços para cada contrato
         const contratosCompletos = await Promise.all(
-            result.rows.map(async (contrato) => {
+            contratosComEndereco.map(async (contrato) => {
                 return await buscarContratoComRelacionamentos(client, contrato.idcontrato);
             })
         );
