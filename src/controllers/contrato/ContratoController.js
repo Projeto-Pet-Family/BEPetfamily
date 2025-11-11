@@ -37,8 +37,6 @@ async function buscarContratoComRelacionamentos(client, idContrato) {
             SELECT 
                 c.*, 
                 h.nome as hospedagem_nome,
-                h.telefone as hospedagem_telefone,
-                h.email as hospedagem_email,
                 e.idendereco,
                 e.numero as endereco_numero,
                 e.complemento as endereco_complemento,
