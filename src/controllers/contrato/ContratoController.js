@@ -148,8 +148,6 @@ async function lerContratos(req, res) {
             SELECT 
                 c.*, 
                 h.nome as hospedagem_nome,
-                h.telefone as hospedagem_telefone,
-                h.email as hospedagem_email,
                 e.numero as endereco_numero,
                 e.complemento as endereco_complemento,
                 l.nome as logradouro_nome,
