@@ -882,6 +882,143 @@ async function buscarContratosPorUsuarioEStatus(req, res) {
     }
 }
 
+// Excluir serviço de um contrato (versão robusta)
+async function excluirServicoContrato(req, res) {
+    let client;
+
+    try {
+        client = await pool.connect();
+        const { idContrato, idServico } = req.params;
+
+        console.log(`🗑️ Tentando remover serviço ${idServico} do contrato ${idContrato}`);
+
+        // Validações básicas
+        if (!idContrato || !idServico) {
+            return res.status(400).json({ 
+                message: 'idContrato e idServico são obrigatórios' 
+            });
+        }
+
+        // Verificar se o contrato existe e está em status editável
+        const contratoResult = await client.query(
+            `SELECT c.*, h.nome as hospedagem_nome 
+             FROM contrato c 
+             LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem 
+             WHERE c.idcontrato = $1`, 
+            [idContrato]
+        );
+        
+        if (contratoResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Contrato não encontrado' });
+        }
+
+        const contrato = contratoResult.rows[0];
+        
+        // Verificar se o contrato permite edição (não pode estar concluído, cancelado, etc.)
+        const statusNaoEditaveis = ['concluido', 'cancelado', 'negado'];
+        if (statusNaoEditaveis.includes(contrato.status)) {
+            return res.status(400).json({ 
+                message: `Não é possível editar serviços de um contrato com status "${contrato.status}"` 
+            });
+        }
+
+        // Verificar se o serviço existe no contrato e obter detalhes
+        const servicoQuery = `
+            SELECT cs.*, s.descricao, s.preco as preco_atual
+            FROM contratoservico cs
+            JOIN servico s ON cs.idservico = s.idservico
+            WHERE cs.idcontrato = $1 AND cs.idservico = $2
+        `;
+        
+        const servicoResult = await client.query(servicoQuery, [idContrato, idServico]);
+        if (servicoResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Serviço não encontrado no contrato' });
+        }
+
+        const servico = servicoResult.rows[0];
+
+        // Iniciar transação
+        await client.query('BEGIN');
+
+        // Excluir o serviço do contrato
+        const deleteResult = await client.query(
+            'DELETE FROM contratoservico WHERE idcontrato = $1 AND idservico = $2 RETURNING *',
+            [idContrato, idServico]
+        );
+
+        const servicoExcluido = deleteResult.rows[0];
+
+        // Registrar log da alteração (opcional)
+        try {
+            await client.query(
+                `INSERT INTO contrato_log (idcontrato, acao, detalhes, idusuario) 
+                 VALUES ($1, $2, $3, $4)`,
+                [
+                    idContrato,
+                    'servico_removido',
+                    JSON.stringify({
+                        servico_id: idServico,
+                        servico_descricao: servico.descricao,
+                        quantidade: servico.quantidade,
+                        preco_unitario: servico.preco_unitario,
+                        subtotal: servico.quantidade * servico.preco_unitario
+                    }),
+                    contrato.idusuario || null
+                ]
+            );
+        } catch (logError) {
+            console.warn('⚠️ Não foi possível registrar log da remoção:', logError);
+            // Não falha a operação principal por causa do log
+        }
+
+        // Buscar contrato completo atualizado
+        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
+
+        // Commit da transação
+        await client.query('COMMIT');
+
+        console.log(`✅ Serviço "${servico.descricao}" removido com sucesso do contrato ${idContrato}`);
+
+        res.status(200).json({
+            message: 'Serviço removido do contrato com sucesso',
+            servicoExcluido: {
+                ...servicoExcluido,
+                descricao: servico.descricao,
+                subtotal: servico.quantidade * servico.preco_unitario
+            },
+            contrato: contratoCompleto
+        });
+
+    } catch (error) {
+        // Rollback em caso de erro
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Erro no rollback:', rollbackError);
+            }
+        }
+
+        console.error('❌ Erro ao excluir serviço do contrato:', error);
+        
+        // Tratamento de erros específicos do PostgreSQL
+        if (error.code === '23503') {
+            return res.status(400).json({
+                message: 'Não é possível excluir o serviço pois está vinculado a outros registros'
+            });
+        }
+
+        res.status(500).json({
+            message: 'Erro ao excluir serviço do contrato',
+            error: error.message
+        });
+    } finally {
+        if (client) {
+            await client.release();
+        }
+    }
+}
+
 module.exports = {
     lerContratos,
     buscarContratoPorId,
@@ -891,5 +1028,6 @@ module.exports = {
     excluirContrato,
     buscarContratosPorUsuario,
     buscarContratosPorUsuarioEStatus,
-    buscarContratoComRelacionamentos
+    buscarContratoComRelacionamentos,
+    excluirServicoContrato
 };

@@ -9,5 +9,6 @@ router.get('/contrato/:idContrato', contratoController.buscarContratoPorId);
 router.post('/contrato', contratoController.criarContrato);
 router.put('/contrato/:idContrato', contratoController.atualizarContrato);
 router.delete('/contrato/:idContrato', contratoController.excluirContrato);
+router.delete('/contrato/:idContrato/servico', contratoController.excluirServicoContrato);
 
 module.exports = router;
