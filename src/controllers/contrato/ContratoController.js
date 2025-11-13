@@ -458,6 +458,25 @@ async function excluirServicoContrato(req, res) {
         if (contrato.rows.length === 0) return res.status(404).json({ message: 'Contrato não encontrado' });
         if (servico.rows.length === 0) return res.status(404).json({ message: 'Serviço não encontrado no contrato' });
 
+        // Verificar se é o último serviço
+        const servicosCount = await client.query('SELECT COUNT(*) as total FROM contratoservico WHERE idcontrato = $1', [idContrato]);
+        if (parseInt(servicosCount.rows[0].total) <= 1) {
+            return res.status(400).json({ 
+                message: 'Não é possível remover o último serviço do contrato',
+                error: 'ULTIMO_SERVICO'
+            });
+        }
+
+        // Verificar se o contrato permite edição (status não editáveis)
+        const contratoAtual = contrato.rows[0];
+        const statusNaoEditaveis = ['concluido', 'cancelado', 'negado', 'em_execucao'];
+        if (statusNaoEditaveis.includes(contratoAtual.status)) {
+            return res.status(400).json({ 
+                message: `Não é possível editar serviços de um contrato com status "${statusMap[contratoAtual.status] || contratoAtual.status}"`,
+                error: 'STATUS_NAO_EDITAVEL'
+            });
+        }
+
         const deleteResult = await client.query(
             'DELETE FROM contratoservico WHERE idcontrato = $1 AND idservico = $2 RETURNING *',
             [idContrato, idServico]
@@ -465,14 +484,19 @@ async function excluirServicoContrato(req, res) {
 
         res.status(200).json({
             message: 'Serviço removido do contrato com sucesso',
-            servicoExcluido: { ...deleteResult.rows[0], descricao: servico.rows[0].descricao }
+            servicoExcluido: { ...deleteResult.rows[0], descricao: servico.rows[0].descricao },
+            success: true
         });
     } catch (error) {
         const statusCode = error.code === '23503' ? 400 : 500;
         const message = error.code === '23503' 
             ? 'Não é possível excluir o serviço pois está vinculado a outros registros'
             : 'Erro ao excluir serviço do contrato';
-        res.status(statusCode).json({ message, error: error.message });
+        res.status(statusCode).json({ 
+            message, 
+            error: error.message, 
+            success: false 
+        });
     } finally {
         if (client) await client.release();
     }
