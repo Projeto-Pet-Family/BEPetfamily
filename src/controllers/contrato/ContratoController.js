@@ -965,6 +965,113 @@ async function excluirServicoContrato(req, res) {
     }
 }
 
+// Excluir pet de um contrato
+async function excluirPetContrato(req, res) {
+    let client;
+
+    try {
+        client = await pool.connect();
+        const { idContrato, idPet } = req.params;
+
+        console.log(`🗑️ Tentando remover pet ${idPet} do contrato ${idContrato}`);
+
+        // Validações básicas
+        if (!idContrato || !idPet) {
+            return res.status(400).json({ 
+                message: 'idContrato e idPet são obrigatórios' 
+            });
+        }
+
+        // Verificar se o contrato existe
+        const contratoResult = await client.query(
+            'SELECT * FROM contrato WHERE idcontrato = $1', 
+            [idContrato]
+        );
+        
+        if (contratoResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Contrato não encontrado' });
+        }
+
+        const contrato = contratoResult.rows[0];
+
+        // Verificar se o contrato permite edição
+        const statusNaoEditaveis = ['concluido', 'cancelado', 'negado'];
+        if (statusNaoEditaveis.includes(contrato.status)) {
+            return res.status(400).json({ 
+                message: `Não é possível editar pets de um contrato com status "${contrato.status}"` 
+            });
+        }
+
+        // Verificar se o pet existe no contrato
+        const petQuery = `
+            SELECT cp.*, p.nome 
+            FROM contrato_pet cp 
+            JOIN pet p ON cp.idpet = p.idpet 
+            WHERE cp.idcontrato = $1 AND cp.idpet = $2
+        `;
+        
+        const petResult = await client.query(petQuery, [idContrato, idPet]);
+        
+        if (petResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Pet não encontrado no contrato' });
+        }
+
+        const pet = petResult.rows[0];
+
+        // Verificar se é o último pet do contrato (não pode remover todos)
+        const petsCountResult = await client.query(
+            'SELECT COUNT(*) as total FROM contrato_pet WHERE idcontrato = $1',
+            [idContrato]
+        );
+
+        const totalPets = parseInt(petsCountResult.rows[0].total);
+
+        if (totalPets <= 1) {
+            return res.status(400).json({
+                message: 'Não é possível remover o último pet do contrato'
+            });
+        }
+
+        // Excluir o pet do contrato
+        const deleteResult = await client.query(
+            'DELETE FROM contrato_pet WHERE idcontrato = $1 AND idpet = $2 RETURNING *',
+            [idContrato, idPet]
+        );
+
+        const petExcluido = deleteResult.rows[0];
+
+        console.log(`✅ Pet "${pet.nome}" removido com sucesso do contrato ${idContrato}`);
+
+        res.status(200).json({
+            message: 'Pet removido do contrato com sucesso',
+            petExcluido: {
+                ...petExcluido,
+                nome: pet.nome
+            },
+            success: true
+        });
+
+    } catch (error) {
+        console.error('❌ Erro ao excluir pet do contrato:', error);
+        
+        if (error.code === '23503') {
+            return res.status(400).json({
+                message: 'Não é possível excluir o pet pois está vinculado a outros registros'
+            });
+        }
+
+        res.status(500).json({
+            message: 'Erro ao excluir pet do contrato',
+            error: error.message,
+            success: false
+        });
+    } finally {
+        if (client) {
+            await client.release();
+        }
+    }
+}
+
 module.exports = {
     lerContratos,
     buscarContratoPorId,
@@ -975,5 +1082,6 @@ module.exports = {
     buscarContratosPorUsuario,
     buscarContratosPorUsuarioEStatus,
     buscarContratoComRelacionamentos,
-    excluirServicoContrato
+    excluirServicoContrato,
+    excluirPetContrato
 };

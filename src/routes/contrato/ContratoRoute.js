@@ -10,5 +10,6 @@ router.post('/contrato', contratoController.criarContrato);
 router.put('/contrato/:idContrato', contratoController.atualizarContrato);
 router.delete('/contrato/:idContrato', contratoController.excluirContrato);
 router.delete('/contrato/:idContrato/servico/:idServico', contratoController.excluirServicoContrato);
+router.delete('/contrato/:idContrato/pet/:idPet', contratoController.excluirPetContrato);
 
 module.exports = router;
