@@ -220,12 +220,22 @@ async function criarContrato(req, res) {
         validarDatas(dataInicio, dataFim);
 
         // Verificações em paralelo
-        const [hospedagem, usuario, petsValidos, servicosValidos, conflito] = await Promise.all([
+        const [hospedagem, usuario, petsValidos, servicosValidos, contratoIdentico] = await Promise.all([
             client.query('SELECT idhospedagem FROM hospedagem WHERE idhospedagem = $1', [idHospedagem]),
             client.query('SELECT idusuario FROM usuario WHERE idusuario = $1', [idUsuario]),
             pets.length > 0 ? client.query('SELECT idpet FROM pet WHERE idpet = ANY($1) AND idusuario = $2', [pets, idUsuario]) : { rows: [] },
             servicos.length > 0 ? client.query('SELECT idservico FROM servico WHERE idservico = ANY($1) AND idhospedagem = $2 AND ativo = true', [servicos.map(s => s.idservico), idHospedagem]) : { rows: [] },
-            client.query(`SELECT idcontrato FROM contrato WHERE idusuario = $1 AND status IN ('em_aprovacao', 'aprovado', 'em_execucao') AND ((datainicio <= $2 AND datafim >= $3) OR (datainicio <= $2 AND $3 IS NULL) OR ($2 BETWEEN datainicio AND COALESCE(datafim, $2))) LIMIT 1`, [idUsuario, dataInicio, dataFim || dataInicio])
+            // Verificar se existe um contrato IDÊNTICO (mesma hospedagem, usuário, datas e status ativo)
+            client.query(
+                `SELECT idcontrato FROM contrato 
+                 WHERE idhospedagem = $1 
+                 AND idusuario = $2 
+                 AND datainicio = $3 
+                 AND COALESCE(datafim, $4) = COALESCE($4, datafim)
+                 AND status IN ('em_aprovacao', 'aprovado', 'em_execucao') 
+                 LIMIT 1`,
+                [idHospedagem, idUsuario, dataInicio, dataFim]
+            )
         ]);
 
         // Validações de existência
@@ -233,7 +243,11 @@ async function criarContrato(req, res) {
         if (usuario.rows.length === 0) throw new Error('Usuário não encontrado');
         if (pets.length > 0 && petsValidos.rows.length !== pets.length) throw new Error('Um ou mais pets não pertencem ao usuário');
         if (servicos.length > 0 && servicosValidos.rows.length !== servicos.length) throw new Error('Um ou mais serviços não estão disponíveis para esta hospedagem');
-        if (conflito.rows.length > 0) throw new Error('Já existe um contrato ativo para este período');
+        
+        // Apenas impedir contrato IDÊNTICO
+        if (contratoIdentico.rows.length > 0) {
+            throw new Error('Já existe um contrato idêntico ativo para este usuário e hospedagem com as mesmas datas');
+        }
 
         // Inserir contrato
         const contratoResult = await client.query(
@@ -347,19 +361,22 @@ async function atualizarDatasContrato(req, res) {
         // Validar datas
         validarDatas(dataInicio, dataFim);
 
-        // Verificar conflitos com outros contratos
-        if (dataInicio || dataFim) {
-            const conflitoResult = await client.query(
+        // Verificar se existe outro contrato IDÊNTICO (apenas se ambas as datas forem fornecidas)
+        if (dataInicio !== undefined && dataFim !== undefined) {
+            const contratoIdentico = await client.query(
                 `SELECT idcontrato FROM contrato 
-                 WHERE idusuario = $1 AND idcontrato != $2
-                 AND status IN ('em_aprovacao', 'aprovado', 'em_execucao')
-                 AND ((datainicio <= $3 AND COALESCE(datafim, $4) >= $4) OR ($3 BETWEEN datainicio AND COALESCE(datafim, $3)))
+                 WHERE idhospedagem = $1 
+                 AND idusuario = $2 
+                 AND idcontrato != $3
+                 AND datainicio = $4 
+                 AND COALESCE(datafim, $5) = COALESCE($5, datafim)
+                 AND status IN ('em_aprovacao', 'aprovado', 'em_execucao') 
                  LIMIT 1`,
-                [contrato.idusuario, idContrato, dataFim || dataFim || dataInicio, dataInicio]
+                [contrato.idhospedagem, contrato.idusuario, idContrato, dataInicio, dataFim]
             );
 
-            if (conflitoResult.rows.length > 0) {
-                return res.status(400).json({ message: 'Já existe um contrato ativo para este período' });
+            if (contratoIdentico.rows.length > 0) {
+                return res.status(400).json({ message: 'Já existe um contrato idêntico ativo para este usuário e hospedagem com as mesmas datas' });
             }
         }
 
