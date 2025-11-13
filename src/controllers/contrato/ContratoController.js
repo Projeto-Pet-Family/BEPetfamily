@@ -238,8 +238,8 @@ async function criarContrato(req, res) {
             status = 'em_aprovacao',
             dataInicio,
             dataFim,
-            pets = [], // Array de IDs dos pets
-            servicos = [] // Array de objetos { idservico, quantidade? }
+            pets = [],
+            servicos = []
         } = req.body;
 
         console.log('📦 Dados recebidos para criar contrato:', {
@@ -252,27 +252,46 @@ async function criarContrato(req, res) {
             servicos
         });
 
-        // Validações básicas
+        // VALIDAÇÃO 1: Campos obrigatórios
+        console.log('🔍 Validando campos obrigatórios...');
         if (!idHospedagem || !idUsuario || !dataInicio) {
+            console.log('❌ Campos obrigatórios faltando:', {
+                idHospedagem: !!idHospedagem,
+                idUsuario: !!idUsuario,
+                dataInicio: !!dataInicio
+            });
             return res.status(400).json({
                 message: 'idHospedagem, idUsuario e dataInicio são obrigatórios'
             });
         }
+        console.log('✅ Campos obrigatórios OK');
 
-        // Validar status
+        // VALIDAÇÃO 2: Status
+        console.log('🔍 Validando status...');
         const statusValidos = ['em_aprovacao', 'aprovado', 'em_execucao', 'concluido', 'negado', 'cancelado'];
         if (!statusValidos.includes(status)) {
+            console.log('❌ Status inválido:', status);
             return res.status(400).json({
                 message: 'Status inválido. Valores permitidos: ' + statusValidos.join(', ')
             });
         }
+        console.log('✅ Status OK');
 
-        // Validar datas
+        // VALIDAÇÃO 3: Datas
+        console.log('🔍 Validando datas...');
         const inicio = new Date(dataInicio);
         const hoje = new Date();
         hoje.setHours(0, 0, 0, 0);
 
+        console.log('📅 Datas:', {
+            dataInicio,
+            inicio: inicio.toISOString(),
+            hoje: hoje.toISOString(),
+            inicioMenorQueHoje: inicio < hoje
+        });
+
         if (inicio < hoje) {
+            console.log('❌ Data início anterior à data atual');
             return res.status(400).json({
                 message: 'Data início não pode ser anterior à data atual'
             });
@@ -280,56 +299,86 @@ async function criarContrato(req, res) {
 
         if (dataFim) {
             const fim = new Date(dataFim);
+            console.log('📅 Data fim:', {
+                dataFim,
+                fim: fim.toISOString(),
+                fimMenorQueInicio: fim < inicio
+            });
+            
             if (fim < inicio) {
+                console.log('❌ Data fim anterior à data início');
                 return res.status(400).json({
                     message: 'Data fim não pode ser anterior à data início'
                 });
             }
         }
+        console.log('✅ Datas OK');
 
-        // Verificar existência das entidades relacionadas
+        // VALIDAÇÃO 4: Hospedagem existe
+        console.log('🔍 Verificando hospedagem...');
         const hospedagemResult = await client.query(
             'SELECT idhospedagem FROM hospedagem WHERE idhospedagem = $1', 
             [idHospedagem]
         );
+        console.log('🏨 Hospedagem encontrada:', hospedagemResult.rows[0]);
         if (hospedagemResult.rows.length === 0) {
+            console.log('❌ Hospedagem não encontrada');
             return res.status(400).json({ message: 'Hospedagem não encontrada' });
         }
+        console.log('✅ Hospedagem OK');
 
+        // VALIDAÇÃO 5: Usuário existe
+        console.log('🔍 Verificando usuário...');
         const usuarioResult = await client.query(
             'SELECT idusuario FROM usuario WHERE idusuario = $1', 
             [idUsuario]
         );
+        console.log('👤 Usuário encontrado:', usuarioResult.rows[0]);
         if (usuarioResult.rows.length === 0) {
+            console.log('❌ Usuário não encontrado');
             return res.status(400).json({ message: 'Usuário não encontrado' });
         }
+        console.log('✅ Usuário OK');
 
-        // Verificar se os pets pertencem ao usuário
+        // VALIDAÇÃO 6: Pets pertencem ao usuário
+        console.log('🔍 Verificando pets...');
         if (pets.length > 0) {
             const petsResult = await client.query(
-                'SELECT idpet FROM pet WHERE idpet = ANY($1) AND idusuario = $2',
+                'SELECT idpet, nome, idusuario FROM pet WHERE idpet = ANY($1) AND idusuario = $2',
                 [pets, idUsuario]
             );
+            console.log('🐾 Pets encontrados:', petsResult.rows);
+            console.log('🐾 Pets solicitados:', pets.length, 'Encontrados:', petsResult.rows.length);
+            
             if (petsResult.rows.length !== pets.length) {
+                console.log('❌ Pets não pertencem ao usuário');
                 return res.status(400).json({ message: 'Um ou mais pets não pertencem ao usuário' });
             }
         }
+        console.log('✅ Pets OK');
 
-        // Verificar se os serviços pertencem à hospedagem
+        // VALIDAÇÃO 7: Serviços pertencem à hospedagem
+        console.log('🔍 Verificando serviços...');
         if (servicos.length > 0) {
             const servicosIds = servicos.map(s => s.idservico);
             const servicosResult = await client.query(
-                'SELECT idservico FROM servico WHERE idservico = ANY($1) AND idhospedagem = $2 AND ativo = true',
+                'SELECT idservico, descricao, idhospedagem, ativo FROM servico WHERE idservico = ANY($1) AND idhospedagem = $2 AND ativo = true',
                 [servicosIds, idHospedagem]
             );
+            console.log('🛎️ Serviços encontrados:', servicosResult.rows);
+            console.log('🛎️ Serviços solicitados:', servicosIds.length, 'Encontrados:', servicosResult.rows.length);
+            
             if (servicosResult.rows.length !== servicosIds.length) {
+                console.log('❌ Serviços não disponíveis para hospedagem');
                 return res.status(400).json({ message: 'Um ou mais serviços não estão disponíveis para esta hospedagem' });
             }
         }
+        console.log('✅ Serviços OK');
 
-        // Verificar se já existe contrato conflitante para as datas
+        // VALIDAÇÃO 8: Conflito de datas
+        console.log('🔍 Verificando conflitos de datas...');
         const conflitoQuery = `
-            SELECT idcontrato 
+            SELECT idcontrato, status, datainicio, datafim 
             FROM contrato 
             WHERE idusuario = $1 
             AND status IN ('em_aprovacao', 'aprovado', 'em_execucao')
@@ -345,17 +394,25 @@ async function criarContrato(req, res) {
             dataInicio, 
             dataFim || dataInicio
         ]);
+        
+        console.log('⚠️ Conflitos encontrados:', conflitoResult.rows);
 
         if (conflitoResult.rows.length > 0) {
+            console.log('❌ Conflito de datas encontrado');
             return res.status(400).json({
                 message: 'Já existe um contrato ativo para este período'
             });
         }
+        console.log('✅ Conflitos OK - Nenhum conflito encontrado');
+
+        // Se chegou aqui, todas as validações passaram
+        console.log('🎯 TODAS AS VALIDAÇÕES PASSARAM - Iniciando criação do contrato...');
 
         // Iniciar transação
         await client.query('BEGIN');
 
         // 1. Inserir contrato
+        console.log('📝 Inserindo contrato...');
         const contratoResult = await client.query(
             `INSERT INTO contrato (idhospedagem, idusuario, status, datainicio, datafim) 
              VALUES ($1, $2, $3, $4, $5) 
@@ -365,7 +422,6 @@ async function criarContrato(req, res) {
 
         const contrato = contratoResult.rows[0];
         const idContrato = contrato.idcontrato;
-
         console.log('✅ Contrato criado com ID:', idContrato);
 
         // 2. Inserir pets do contrato
@@ -411,10 +467,11 @@ async function criarContrato(req, res) {
         await client.query('COMMIT');
 
         // Buscar contrato completo com relacionamentos
+        console.log('🔍 Buscando contrato completo...');
         const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
 
-        console.log('🎉 Contrato criado com sucesso:', contratoCompleto);
-
+        console.log('🎉 CONTRATO CRIADO COM SUCESSO!');
+        
         res.status(201).json({
             message: 'Contrato criado com sucesso',
             data: contratoCompleto
@@ -426,7 +483,7 @@ async function criarContrato(req, res) {
             await client.query('ROLLBACK');
         }
         
-        console.error('❌ Erro ao criar contrato:', error);
+        console.error('❌ ERRO AO CRIAR CONTRATO:', error);
         res.status(500).json({
             message: 'Erro ao criar contrato',
             error: error.message
