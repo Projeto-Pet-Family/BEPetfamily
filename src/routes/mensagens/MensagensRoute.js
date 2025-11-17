@@ -1,8 +1,8 @@
 // routes/mensagensRoute.js
 const express = require('express')
 const Router = express.Router()
-const MensagensController = require('../../controllers/mensagensController.js')
-
+const MensagensController = require('../../controllers/mensagens/MensagemController.js')
+  
 Router.get('/mensagem/usuario/:idusuario', MensagensController.listarMensagens)
 Router.get('/mensagem/conversa/:idusuario1/:idusuario2', MensagensController.buscarConversa)
 Router.get('/mensagens/:idmensagem', MensagensController.buscarMensagem)
