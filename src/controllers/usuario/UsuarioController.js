@@ -56,7 +56,7 @@ async function inserirUsuario(req, res) {
             cpf, 
             email,
             telefone,
-            senha, // Senha em texto puro
+            senha,
             ativado = false,
             desativado = false,
             esqueceuSenha = false,
@@ -226,4 +226,6 @@ module.exports = {
     inserirUsuario,
     atualizarUsuario,
     excluirUsuario,
+    inserirPetPadraoAoRegistrar,
+    inserirPetParaNovoUsuario
 };

@@ -265,6 +265,89 @@ async function listarPetsPorUsuario(req, res) {
         }
     }
 }
+
+async function inserirPetParaNovoUsuario(req, res) {
+    let client;
+
+    try {
+        client = await pool.connect();
+
+        const { 
+            idUsuario,
+            nome = 'Meu Pet',
+            idPorte = null,
+            idEspecie = null,
+            idRaca = null,
+            sexo = 'M'
+        } = req.body;
+
+        // Validação básica
+        if (!idUsuario) {
+            return res.status(400).json({ message: 'ID do usuário é obrigatório' });
+        }
+
+        // Verificar se o usuário existe
+        const userResult = await client.query('SELECT * FROM Usuario WHERE idUsuario = $1', [idUsuario]);
+        
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Usuário não encontrado' });
+        }
+
+        // Inserir o pet
+        const result = await client.query(
+            `INSERT INTO Pet 
+             (idUsuario, idPorte, idEspecie, idRaca, nome, sexo) 
+             VALUES ($1, $2, $3, $4, $5, $6) 
+             RETURNING idPet, nome, sexo, idUsuario`,
+            [idUsuario, idPorte, idEspecie, idRaca, nome, sexo]
+        );
+
+        res.status(201).json({
+            message: 'Pet criado com sucesso para o novo usuário!',
+            data: result.rows[0]
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao criar pet para o usuário, confira o console'
+        });
+        console.log(error);
+    } finally {
+        if (client) {
+            client.release();
+        }
+    }
+}
+
+async function inserirPetPadraoAoRegistrar(idUsuario, client) {
+    try {
+        // Buscar valores padrão das tabelas relacionadas
+        const especieResult = await client.query('SELECT idEspecie FROM Especie LIMIT 1');
+        const porteResult = await client.query('SELECT idPorte FROM Porte LIMIT 1');
+        const racaResult = await client.query('SELECT idRaca FROM Raca LIMIT 1');
+
+        const idEspecie = especieResult.rows.length > 0 ? especieResult.rows[0].idespecie : null;
+        const idPorte = porteResult.rows.length > 0 ? porteResult.rows[0].idporte : null;
+        const idRaca = racaResult.rows.length > 0 ? racaResult.rows[0].idraca : null;
+
+        // Inserir pet padrão
+        const result = await client.query(
+            `INSERT INTO Pet 
+             (idUsuario, idPorte, idEspecie, idRaca, nome, sexo) 
+             VALUES ($1, $2, $3, $4, $5, $6) 
+             RETURNING idPet, nome, sexo, idUsuario`,
+            [idUsuario, idPorte, idEspecie, idRaca, 'Meu Pet', 'M']
+        );
+
+        console.log(`Pet padrão criado para usuário ${idUsuario}:`, result.rows[0]);
+        return result.rows[0];
+
+    } catch (error) {
+        console.error('Erro ao criar pet padrão:', error);
+        throw error;
+    }
+}
+
 /* 
 async function buscarPetPorId(req, res) {
     let client;
