@@ -1,5 +1,6 @@
 const pool = require('../../connections/SQLConnections.js');
 const bcrypt = require('bcrypt');
+const {inserirPetPadraoAoRegistrar} = require('../pet/PetController.js')
 
 async function lerUsuarios(req, res) {
     let client;
@@ -60,14 +61,19 @@ async function inserirUsuario(req, res) {
             ativado = false,
             desativado = false,
             esqueceuSenha = false,
-            dataCadastro = new Date()
+            dataCadastro = new Date(),
+            criarPetPadrao = true // Novo parâmetro opcional
         } = req.body;
 
         // Hash da senha
         const saltRounds = 10;
         const senhaHash = await bcrypt.hash(senha, saltRounds);
 
-        const result = await client.query(
+        // Iniciar transação
+        await client.query('BEGIN');
+
+        // Inserir usuário
+        const userResult = await client.query(
             `INSERT INTO Usuario 
              (nome, cpf, email, telefone, senha, ativado, desativado, esqueceuSenha, dataCadastro) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
@@ -75,12 +81,38 @@ async function inserirUsuario(req, res) {
             [nome, cpf, email, telefone, senhaHash, ativado, desativado, esqueceuSenha, dataCadastro]
         );
 
-        res.status(201).json({
+        const novoUsuario = userResult.rows[0];
+
+        // Criar pet padrão automaticamente se solicitado
+        let petCriado = null;
+        if (criarPetPadrao) {
+            try {
+                petCriado = await inserirPetPadraoAoRegistrar(novoUsuario.idusuario, client);
+            } catch (petError) {
+                console.warn('Não foi possível criar pet padrão, continuando sem pet:', petError);
+                // Não falha a criação do usuário se o pet der erro
+            }
+        }
+
+        // Commit da transação
+        await client.query('COMMIT');
+
+        const response = {
             message: 'Usuário criado com sucesso!',
-            data: result.rows[0]
-        });
+            data: {
+                usuario: novoUsuario,
+                pet: petCriado
+            }
+        };
+
+        res.status(201).json(response);
 
     } catch (error) {
+        // Rollback em caso de erro
+        if (client) {
+            await client.query('ROLLBACK');
+        }
+
         if (error.code === '23505') {
             return res.status(409).json({
                 message: 'CPF ou email já cadastrado'
