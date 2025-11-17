@@ -15,6 +15,8 @@ const AutenticationRoute = require('./routes/usuario/AutenticationRoute.js')
 const ContratoRoute = require('./routes/contrato/ContratoRoute.js')
 const ContratoServicoRoute = require('./routes/contrato/ContratoServicoRoute.js')
 const ContratoPetRoute = require('./routes/contrato/ContratoPetRoute.js')
+const AvaliacaoRoute = require('./routes/contrato/AvaliacaoRoute.js') 
+const DenunciaRoute = require('./routes/contrato/DenunciaRoute.js')
 
 const HospedagemRoute = require('./routes/hospedagem/HospedagemRoute.js')
 const ServicoRoute = require('./routes/hospedagem/ServicoRoute.js')
@@ -49,12 +51,14 @@ app.use(express.json())
 
 app.use(
     cors(),
-    UsuarioRoute,
+    UsuarioRoute, 
     AutenticationRoute,
 
     ContratoRoute,
     ContratoServicoRoute,
     ContratoPetRoute,
+    AvaliacaoRoute,
+    DenunciaRoute,
 
     HospedagemRoute,
     ServicoRoute,
