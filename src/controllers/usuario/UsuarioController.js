@@ -1,6 +1,6 @@
 const pool = require('../../connections/SQLConnections.js');
 const bcrypt = require('bcrypt');
-const {inserirPetPadraoAoRegistrar} = require('../pet/PetController.js')
+const { inserirPetPadraoAoRegistrar } = require('../pet/PetController.js')
 
 async function lerUsuarios(req, res) {
     let client;
@@ -257,7 +257,5 @@ module.exports = {
     buscarUsuarioPorId,
     inserirUsuario,
     atualizarUsuario,
-    excluirUsuario,
-    inserirPetPadraoAoRegistrar,
-    inserirPetParaNovoUsuario
+    excluirUsuario
 };
