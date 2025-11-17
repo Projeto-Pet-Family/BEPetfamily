@@ -12,5 +12,7 @@ router.delete('/contrato/:idContrato', contratoController.excluirContrato);
 router.delete('/contrato/:idContrato/servico/:idServico', contratoController.excluirServicoContrato);
 router.delete('/contrato/:idContrato/pet/:idPet', contratoController.excluirPetContrato);
 router.put('/contrato/:idContrato/atualizar-data', contratoController.atualizarDatasContrato);
+router.put('/contrato/:idContrato/status', contratoController.alterarStatusContrato);
+router.get('/contrato/:idContrato/transicoes-status', contratoController.obterTransicoesStatus);
 
 module.exports = router;

@@ -568,6 +568,206 @@ async function excluirPetContrato(req, res) {
     }
 }
 
+// NOVO MÉTODO: Alterar status do contrato com validações específicas
+async function alterarStatusContrato(req, res) {
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        const { idContrato } = req.params;
+        const { status, motivo } = req.body;
+
+        // Validações básicas
+        if (!status) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: 'Status é obrigatório' });
+        }
+
+        if (!validarStatus(status)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: 'Status inválido' });
+        }
+
+        // Buscar contrato atual
+        const contratoResult = await client.query(
+            'SELECT * FROM contrato WHERE idcontrato = $1',
+            [idContrato]
+        );
+
+        if (contratoResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Contrato não encontrado' });
+        }
+
+        const contratoAtual = contratoResult.rows[0];
+        const statusAtual = contratoAtual.status;
+
+        // Validar transições de status permitidas
+        const transicoesPermitidas = {
+            'em_aprovacao': ['aprovado', 'negado', 'cancelado'],
+            'aprovado': ['em_execucao', 'cancelado'],
+            'em_execucao': ['concluido', 'cancelado'],
+            'concluido': [], // Não permite alteração após conclusão
+            'negado': [], // Não permite alteração após negação
+            'cancelado': [] // Não permite alteração após cancelamento
+        };
+
+        // Verificar se a transição é permitida
+        const transicoes = transicoesPermitidas[statusAtual];
+        if (!transicoes || !transicoes.includes(status)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ 
+                message: `Não é possível alterar o status de "${statusMap[statusAtual]}" para "${statusMap[status]}"`,
+                statusAtual: statusAtual,
+                statusNovo: status,
+                transicoesPermitidas: transicoesPermitidas[statusAtual]
+            });
+        }
+
+        // Validações específicas por status
+        switch (status) {
+            case 'em_execucao':
+                // Verificar se a data de início já passou
+                const hoje = new Date();
+                hoje.setHours(0, 0, 0, 0);
+                const dataInicio = new Date(contratoAtual.datainicio);
+                dataInicio.setHours(0, 0, 0, 0);
+                
+                if (dataInicio > hoje) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({ 
+                        message: 'Não é possível iniciar a execução antes da data de início do contrato'
+                    });
+                }
+                break;
+
+            case 'concluido':
+                // Verificar se a data de fim já passou (se existir)
+                if (contratoAtual.datafim) {
+                    const dataFim = new Date(contratoAtual.datafim);
+                    dataFim.setHours(0, 0, 0, 0);
+                    const hoje = new Date();
+                    hoje.setHours(0, 0, 0, 0);
+                    
+                    if (dataFim > hoje) {
+                        await client.query('ROLLBACK');
+                        return res.status(400).json({ 
+                            message: 'Não é possível concluir o contrato antes da data de fim'
+                        });
+                    }
+                }
+                break;
+
+            case 'negado':
+                // Motivo é obrigatório para negar
+                if (!motivo || motivo.trim().length === 0) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({ 
+                        message: 'Motivo é obrigatório para negar um contrato'
+                    });
+                }
+                break;
+        }
+
+        // Atualizar o status
+        const updateQuery = `
+            UPDATE contrato 
+            SET status = $1, dataatualizacao = CURRENT_TIMESTAMP 
+            WHERE idcontrato = $2 
+            RETURNING *
+        `;
+
+        const updateResult = await client.query(updateQuery, [status, idContrato]);
+        
+        // Se necessário, registrar o motivo (para negados)
+        if (status === 'negado' && motivo) {
+            // Aqui você pode criar uma tabela de log de status se necessário
+            console.log(`Contrato ${idContrato} negado. Motivo: ${motivo}`);
+        }
+
+        await client.query('COMMIT');
+
+        // Buscar contrato completo atualizado
+        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
+
+        res.status(200).json({
+            message: `Status do contrato alterado de "${statusMap[statusAtual]}" para "${statusMap[status]}" com sucesso`,
+            data: contratoCompleto,
+            alteracao: {
+                de: statusAtual,
+                para: status,
+                descricao: `De ${statusMap[statusAtual]} para ${statusMap[status]}`
+            }
+        });
+
+    } catch (error) {
+        if (client) await client.query('ROLLBACK');
+        console.error('Erro ao alterar status do contrato:', error);
+        res.status(500).json({ 
+            message: 'Erro ao alterar status do contrato', 
+            error: error.message 
+        });
+    } finally {
+        if (client) await client.release();
+    }
+}
+
+// Método para obter transições de status permitidas
+async function obterTransicoesStatus(req, res) {
+    let client;
+    try {
+        const { idContrato } = req.params;
+
+        client = await pool.connect();
+        
+        const contratoResult = await client.query(
+            'SELECT status FROM contrato WHERE idcontrato = $1',
+            [idContrato]
+        );
+
+        if (contratoResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Contrato não encontrado' });
+        }
+
+        const statusAtual = contratoResult.rows[0].status;
+
+        const transicoesPermitidas = {
+            'em_aprovacao': ['aprovado', 'negado', 'cancelado'],
+            'aprovado': ['em_execucao', 'cancelado'],
+            'em_execucao': ['concluido', 'cancelado'],
+            'concluido': [],
+            'negado': [],
+            'cancelado': []
+        };
+
+        const transicoes = transicoesPermitidas[statusAtual] || [];
+
+        res.status(200).json({
+            statusAtual: statusAtual,
+            descricaoStatusAtual: statusMap[statusAtual],
+            transicoesPermitidas: transicoes.map(status => ({
+                status: status,
+                descricao: statusMap[status]
+            })),
+            todasOpcoes: statusValidos.map(status => ({
+                status: status,
+                descricao: statusMap[status],
+                permitido: transicoes.includes(status)
+            }))
+        });
+
+    } catch (error) {
+        console.error('Erro ao obter transições de status:', error);
+        res.status(500).json({ 
+            message: 'Erro ao obter transições de status', 
+            error: error.message 
+        });
+    } finally {
+        if (client) await client.release();
+    }
+}
+
 module.exports = {
     lerContratos,
     buscarContratoPorId,
@@ -682,5 +882,7 @@ module.exports = {
     },
     excluirServicoContrato,
     excluirPetContrato,
-    buscarContratoComRelacionamentos
+    buscarContratoComRelacionamentos,
+    alterarStatusContrato,
+    obterTransicoesStatus
 };
