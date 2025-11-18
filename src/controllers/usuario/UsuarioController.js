@@ -77,7 +77,7 @@ async function inserirUsuario(req, res) {
              (nome, cpf, email, telefone, senha, esqueceuSenha, dataCadastro) 
              VALUES ($1, $2, $3, $4, $5, $6, $7) 
              RETURNING idUsuario, nome, email, cpf, telefone, dataCadastro`,
-            [nome, cpf, email, telefone, senhaHash,, esqueceuSenha, dataCadastro]
+            [nome, cpf, email, telefone, senhaHash, esqueceuSenha, dataCadastro]
         );
 
         const novoUsuario = userResult.rows[0];
