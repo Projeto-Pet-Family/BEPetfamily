@@ -163,8 +163,6 @@ async function atualizarUsuario(req, res) {
             email = null,
             telefone = null,
             senha = null,
-            ativado = null,
-            desativado = null,
             esqueceuSenha = null
         } = req.body;
 
@@ -183,8 +181,6 @@ async function atualizarUsuario(req, res) {
         if (email !== null) { updateFields.email = email; }
         if (telefone !== null) { updateFields.telefone = telefone; }
         if (senha !== null) { updateFields.senha = senha; }
-        if (ativado !== null) { updateFields.ativado = ativado; }
-        if (desativado !== null) { updateFields.desativado = desativado; }
         if (esqueceuSenha !== null) { updateFields.esqueceuSenha = esqueceuSenha; }
 
         if (Object.keys(updateFields).length === 0) {

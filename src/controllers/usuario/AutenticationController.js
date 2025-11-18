@@ -18,7 +18,7 @@ async function loginUsuario(req, res) {
 
         // Buscar usuário
         const result = await client.query(
-            'SELECT * FROM Usuario WHERE email = $1 AND desativado = false',
+            'SELECT * FROM Usuario WHERE email = $1',
             [email.trim().toLowerCase()]
         );
 
@@ -31,15 +31,6 @@ async function loginUsuario(req, res) {
 
         const usuario = result.rows[0];
 
-        // Verificar conta ativada
-        if (!usuario.ativado) {
-            return res.status(403).json({
-                success: false,
-                message: 'Conta não ativada. Ative sua conta antes de fazer login.'
-            });
-        }
-
-        // Verificar senha
         const senhaValida = await bcrypt.compare(senha, usuario.senha);
         if (!senhaValida) {
             return res.status(401).json({
@@ -95,7 +86,7 @@ async function alterarSenha(req, res) {
 
         // Buscar usuário
         const userResult = await client.query(
-            'SELECT * FROM Usuario WHERE idUsuario = $1 AND desativado = false',
+            'SELECT * FROM Usuario WHERE idUsuario = $1',
             [idUsuario]
         );
 
@@ -161,7 +152,7 @@ async function solicitarRecuperacaoSenha(req, res) {
 
         // Buscar usuário pelo email
         const result = await client.query(
-            'SELECT idusuario, nome, email, senha FROM Usuario WHERE email = $1 AND desativado = false AND ativado = true',
+            'SELECT idusuario, nome, email, senha FROM Usuario WHERE email = $1',
             [email.trim().toLowerCase()]
         );
 
@@ -226,7 +217,7 @@ async function redefinirSenha(req, res) {
 
         // Buscar usuário pelo email
         const userResult = await client.query(
-            'SELECT idusuario, senha FROM Usuario WHERE email = $1 AND desativado = false',
+            'SELECT idusuario, senha FROM Usuario WHERE email = $1',
             [emailFormatado]
         );
 
