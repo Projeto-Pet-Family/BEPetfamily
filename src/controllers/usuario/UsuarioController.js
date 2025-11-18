@@ -58,8 +58,6 @@ async function inserirUsuario(req, res) {
             email,
             telefone,
             senha,
-            ativado = false,
-            desativado = false,
             esqueceuSenha = false,
             dataCadastro = new Date(),
             // ✅ NOVO: Dados do pet vindo do request
@@ -76,10 +74,10 @@ async function inserirUsuario(req, res) {
         // Inserir usuário
         const userResult = await client.query(
             `INSERT INTO Usuario 
-             (nome, cpf, email, telefone, senha, ativado, desativado, esqueceuSenha, dataCadastro) 
+             (nome, cpf, email, telefone, senha, esqueceuSenha, dataCadastro) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
-             RETURNING idUsuario, nome, email, cpf, telefone, ativado, dataCadastro`,
-            [nome, cpf, email, telefone, senhaHash, ativado, desativado, esqueceuSenha, dataCadastro]
+             RETURNING idUsuario, nome, email, cpf, telefone, dataCadastro`,
+            [nome, cpf, email, telefone, senhaHash,, esqueceuSenha, dataCadastro]
         );
 
         const novoUsuario = userResult.rows[0];
