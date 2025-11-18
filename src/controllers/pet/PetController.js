@@ -266,127 +266,81 @@ async function listarPetsPorUsuario(req, res) {
     }
 }
 
-async function inserirPetParaNovoUsuario(req, res) {
-    let client;
-
-    try {
-        client = await pool.connect();
-
-        const { 
-            idUsuario,
-            nome = 'Meu Pet',
-            idPorte = null,
-            idEspecie = null,
-            idRaca = null,
-            sexo = 'M'
-        } = req.body;
-
-        // Validação básica
-        if (!idUsuario) {
-            return res.status(400).json({ message: 'ID do usuário é obrigatório' });
-        }
-
-        // Verificar se o usuário existe
-        const userResult = await client.query('SELECT * FROM Usuario WHERE idUsuario = $1', [idUsuario]);
-        
-        if (userResult.rows.length === 0) {
-            return res.status(404).json({ message: 'Usuário não encontrado' });
-        }
-
-        // Inserir o pet
-        const result = await client.query(
-            `INSERT INTO Pet 
-             (idUsuario, idPorte, idEspecie, idRaca, nome, sexo) 
-             VALUES ($1, $2, $3, $4, $5, $6) 
-             RETURNING idPet, nome, sexo, idUsuario`,
-            [idUsuario, idPorte, idEspecie, idRaca, nome, sexo]
-        );
-
-        res.status(201).json({
-            message: 'Pet criado com sucesso para o novo usuário!',
-            data: result.rows[0]
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            message: 'Erro ao criar pet para o usuário, confira o console'
-        });
-        console.log(error);
-    } finally {
-        if (client) {
-            client.release();
-        }
-    }
-}
-
 async function inserirPetPadraoAoRegistrar(idUsuario, client) {
     try {
-        // Buscar valores padrão das tabelas relacionadas
-        const especieResult = await client.query('SELECT idEspecie FROM Especie LIMIT 1');
-        const porteResult = await client.query('SELECT idPorte FROM Porte LIMIT 1');
-        const racaResult = await client.query('SELECT idRaca FROM Raca LIMIT 1');
+        console.log(`🐾 Iniciando criação de pet padrão para usuário: ${idUsuario}`);
 
-        const idEspecie = especieResult.rows.length > 0 ? especieResult.rows[0].idespecie : null;
-        const idPorte = porteResult.rows.length > 0 ? porteResult.rows[0].idporte : null;
-        const idRaca = racaResult.rows.length > 0 ? racaResult.rows[0].idraca : null;
+        // Buscar valores padrão das tabelas relacionadas com tratamento de erro
+        let idEspecie = null;
+        let idPorte = null;
+        let idRaca = null;
+
+        try {
+            const especieResult = await client.query('SELECT idEspecie FROM Especie LIMIT 1');
+            idEspecie = especieResult.rows.length > 0 ? especieResult.rows[0].idespecie : null;
+            console.log(`🔍 ID Especie encontrado: ${idEspecie}`);
+        } catch (e) {
+            console.warn('⚠️ Não foi possível obter espécie padrão:', e.message);
+        }
+
+        try {
+            const porteResult = await client.query('SELECT idPorte FROM Porte LIMIT 1');
+            idPorte = porteResult.rows.length > 0 ? porteResult.rows[0].idporte : null;
+            console.log(`🔍 ID Porte encontrado: ${idPorte}`);
+        } catch (e) {
+            console.warn('⚠️ Não foi possível obter porte padrão:', e.message);
+        }
+
+        try {
+            const racaResult = await client.query('SELECT idRaca FROM Raca LIMIT 1');
+            idRaca = racaResult.rows.length > 0 ? racaResult.rows[0].idraca : null;
+            console.log(`🔍 ID Raça encontrado: ${idRaca}`);
+        } catch (e) {
+            console.warn('⚠️ Não foi possível obter raça padrão:', e.message);
+        }
 
         // Inserir pet padrão
         const result = await client.query(
             `INSERT INTO Pet 
              (idUsuario, idPorte, idEspecie, idRaca, nome, sexo) 
              VALUES ($1, $2, $3, $4, $5, $6) 
-             RETURNING idPet, nome, sexo, idUsuario`,
+             RETURNING idPet, nome, sexo, idUsuario, idPorte, idEspecie, idRaca`,
             [idUsuario, idPorte, idEspecie, idRaca, 'Meu Pet', 'M']
         );
 
-        console.log(`Pet padrão criado para usuário ${idUsuario}:`, result.rows[0]);
-        return result.rows[0];
+        const petCriado = result.rows[0];
+        console.log(`✅ Pet padrão criado com sucesso para usuário ${idUsuario}:`, petCriado);
+        return petCriado;
 
     } catch (error) {
-        console.error('Erro ao criar pet padrão:', error);
+        console.error('❌ Erro ao criar pet padrão:', error);
+        
+        // Se der erro de chave estrangeira, tenta criar sem as FKs
+        if (error.code === '23503') {
+            console.log('🔄 Tentando criar pet sem FKs devido a erro de chave estrangeira...');
+            
+            try {
+                const result = await client.query(
+                    `INSERT INTO Pet 
+                     (idUsuario, nome, sexo) 
+                     VALUES ($1, $2, $3) 
+                     RETURNING idPet, nome, sexo, idUsuario`,
+                    [idUsuario, 'Meu Pet', 'M']
+                );
+                
+                const petCriado = result.rows[0];
+                console.log(`✅ Pet padrão criado (sem FKs) para usuário ${idUsuario}:`, petCriado);
+                return petCriado;
+            } catch (secondError) {
+                console.error('❌ Erro também na segunda tentativa:', secondError);
+                throw secondError;
+            }
+        }
+        
         throw error;
     }
 }
-
-/* 
-async function buscarPetPorId(req, res) {
-    let client;
-
-    try {
-        client = await pool.connect();
-        const { idPet } = req.params;
-
-        const result = await client.query(
-            `SELECT * FROM Pet WHERE idPet = $1`,
-            [idPet]
-        );
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'Pet não encontrado'
-            });
-        }
-
-        res.status(200).json({
-            success: true,
-            message: 'Pet encontrado com sucesso',
-            pet: result.rows[0]
-        });
-
-    } catch (error) {
-        console.error('Erro ao buscar pet:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Erro interno ao buscar pet'
-        });
-    } finally {
-        if (client) {
-            client.release();
-        }
-    }
-}
- */
+ 
 module.exports = {
     lerPet,
     lerPetPorId,
@@ -394,5 +348,5 @@ module.exports = {
     updatePet,
     deletePet,
     listarPetsPorUsuario,
-    /* buscarPetPorId */
+    inserirPetPadraoAoRegistrar
 };

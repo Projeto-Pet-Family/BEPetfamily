@@ -81,6 +81,19 @@ async function inserirUsuario(req, res) {
         );
 
         const novoUsuario = userResult.rows[0];
+        const idUsuario = novoUsuario.idusuario;
+
+        // ✅ AGORA CRIAR O PET PADRÃO PARA O NOVO USUÁRIO
+        console.log(`🔄 Criando pet padrão para o novo usuário ID: ${idUsuario}`);
+        
+        try {
+            const petPadrao = await inserirPetPadraoAoRegistrar(idUsuario, client);
+            console.log('✅ Pet padrão criado com sucesso:', petPadrao);
+        } catch (petError) {
+            console.error('❌ Erro ao criar pet padrão:', petError);
+            // Não fazemos rollback aqui - o usuário foi criado, só o pet que falhou
+            // Isso evita que o cadastro completo falhe por causa do pet
+        }
 
         // Commit da transação
         await client.query('COMMIT');
