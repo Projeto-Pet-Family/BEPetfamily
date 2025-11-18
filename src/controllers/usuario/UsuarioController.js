@@ -62,7 +62,6 @@ async function inserirUsuario(req, res) {
             desativado = false,
             esqueceuSenha = false,
             dataCadastro = new Date(),
-            criarPetPadrao = true // Novo parâmetro opcional
         } = req.body;
 
         // Hash da senha
@@ -90,7 +89,6 @@ async function inserirUsuario(req, res) {
             message: 'Usuário criado com sucesso!',
             data: {
                 usuario: novoUsuario,
-                pet: petCriado
             }
         };
 
