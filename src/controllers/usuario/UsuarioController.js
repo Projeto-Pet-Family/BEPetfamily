@@ -75,7 +75,7 @@ async function inserirUsuario(req, res) {
         const userResult = await client.query(
             `INSERT INTO Usuario 
              (nome, cpf, email, telefone, senha, esqueceuSenha, dataCadastro) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7) 
              RETURNING idUsuario, nome, email, cpf, telefone, dataCadastro`,
             [nome, cpf, email, telefone, senhaHash,, esqueceuSenha, dataCadastro]
         );
