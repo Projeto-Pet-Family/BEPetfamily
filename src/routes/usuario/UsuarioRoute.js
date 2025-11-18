@@ -9,4 +9,4 @@ Router.post('/usuarios', UsuarioController.inserirUsuario)
 Router.put('/usuarios/:idUsuario', UsuarioController.atualizarUsuario)
 Router.delete('/usuarios/:idUsuario', UsuarioController.excluirUsuario)
 
-module.exports = Router  
+module.exports = Router

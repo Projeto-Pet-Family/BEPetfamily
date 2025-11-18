@@ -83,17 +83,6 @@ async function inserirUsuario(req, res) {
 
         const novoUsuario = userResult.rows[0];
 
-        // Criar pet padrão automaticamente se solicitado
-        let petCriado = null;
-        if (criarPetPadrao) {
-            try {
-                petCriado = await inserirPetPadraoAoRegistrar(novoUsuario.idusuario, client);
-            } catch (petError) {
-                console.warn('Não foi possível criar pet padrão, continuando sem pet:', petError);
-                // Não falha a criação do usuário se o pet der erro
-            }
-        }
-
         // Commit da transação
         await client.query('COMMIT');
 
