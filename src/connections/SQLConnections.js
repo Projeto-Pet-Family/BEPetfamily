@@ -5,9 +5,9 @@ const connectionString = 'postgresql://neondb_owner:npg_FdYvOjbx51CX@ep-lingerin
 const pool = new Pool({
   connectionString: connectionString,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-  connectionTimeoutMillis: 10000, // 10 segundos
+  connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 30000,
-  max: 20
+  max: 100
 });
 pool.on('connect', () => {
   console.log('Conectado ao PostgreSQL Neon');
