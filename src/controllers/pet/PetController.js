@@ -266,70 +266,77 @@ async function listarPetsPorUsuario(req, res) {
     }
 }
 
-async function inserirPetPadraoAoRegistrar(idUsuario, client) {
+async function inserirPetPadraoAoRegistrar(idUsuario, petData, client) {
     try {
-        console.log(`🐾 Iniciando criação de pet padrão para usuário: ${idUsuario}`);
+        console.log(`🐾 Iniciando criação de pet para usuário: ${idUsuario}`);
+        console.log(`📦 Dados do pet:`, petData);
 
-        // Buscar valores padrão das tabelas relacionadas com tratamento de erro
-        let idEspecie = null;
-        let idPorte = null;
-        let idRaca = null;
+        // Extrai os dados do pet ou usa valores padrão se não fornecidos
+        const {
+            nome = 'Meu Pet',
+            sexo = 'M',
+            idPorte = null,
+            idEspecie = null,
+            idRaca = null,
+            observacoes = null
+        } = petData;
 
-        try {
-            const especieResult = await client.query('SELECT idEspecie FROM Especie LIMIT 1');
-            idEspecie = especieResult.rows.length > 0 ? especieResult.rows[0].idespecie : null;
-            console.log(`🔍 ID Especie encontrado: ${idEspecie}`);
-        } catch (e) {
-            console.warn('⚠️ Não foi possível obter espécie padrão:', e.message);
+        // Validações básicas
+        if (!nome || nome.trim() === '') {
+            throw new Error('Nome do pet é obrigatório');
         }
 
-        try {
-            const porteResult = await client.query('SELECT idPorte FROM Porte LIMIT 1');
-            idPorte = porteResult.rows.length > 0 ? porteResult.rows[0].idporte : null;
-            console.log(`🔍 ID Porte encontrado: ${idPorte}`);
-        } catch (e) {
-            console.warn('⚠️ Não foi possível obter porte padrão:', e.message);
+        if (!sexo) {
+            throw new Error('Sexo do pet é obrigatório');
         }
 
-        try {
-            const racaResult = await client.query('SELECT idRaca FROM Raca LIMIT 1');
-            idRaca = racaResult.rows.length > 0 ? racaResult.rows[0].idraca : null;
-            console.log(`🔍 ID Raça encontrado: ${idRaca}`);
-        } catch (e) {
-            console.warn('⚠️ Não foi possível obter raça padrão:', e.message);
-        }
+        console.log(`🔍 Dados finais do pet:`);
+        console.log(`   👤 ID Usuário: ${idUsuario}`);
+        console.log(`   🐾 Nome: ${nome}`);
+        console.log(`   ⚧️ Sexo: ${sexo}`);
+        console.log(`   📏 Porte ID: ${idPorte}`);
+        console.log(`   🐶 Espécie ID: ${idEspecie}`);
+        console.log(`   🐕 Raça ID: ${idRaca}`);
+        console.log(`   📝 Observações: ${observacoes}`);
 
-        // Inserir pet padrão
+        // Inserir pet com os dados fornecidos
         const result = await client.query(
             `INSERT INTO Pet 
-             (idUsuario, idPorte, idEspecie, idRaca, nome, sexo) 
-             VALUES ($1, $2, $3, $4, $5, $6) 
-             RETURNING idPet, nome, sexo, idUsuario, idPorte, idEspecie, idRaca`,
-            [idUsuario, idPorte, idEspecie, idRaca, 'Meu Pet', 'M']
+             (idUsuario, idPorte, idEspecie, idRaca, nome, sexo, observacoes) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7) 
+             RETURNING *`,
+            [idUsuario, idPorte, idEspecie, idRaca, nome.trim(), sexo, observacoes]
         );
 
         const petCriado = result.rows[0];
-        console.log(`✅ Pet padrão criado com sucesso para usuário ${idUsuario}:`, petCriado);
+        console.log(`✅ Pet criado com sucesso para usuário ${idUsuario}:`, {
+            idPet: petCriado.idpet,
+            nome: petCriado.nome,
+            sexo: petCriado.sexo,
+            idUsuario: petCriado.idusuario
+        });
         return petCriado;
 
     } catch (error) {
-        console.error('❌ Erro ao criar pet padrão:', error);
+        console.error('❌ Erro ao criar pet:', error);
         
         // Se der erro de chave estrangeira, tenta criar sem as FKs
         if (error.code === '23503') {
             console.log('🔄 Tentando criar pet sem FKs devido a erro de chave estrangeira...');
             
             try {
+                const { nome = 'Meu Pet', sexo = 'M', observacoes = null } = petData;
+                
                 const result = await client.query(
                     `INSERT INTO Pet 
-                     (idUsuario, nome, sexo) 
-                     VALUES ($1, $2, $3) 
-                     RETURNING idPet, nome, sexo, idUsuario`,
-                    [idUsuario, 'Meu Pet', 'M']
+                     (idUsuario, nome, sexo, observacoes) 
+                     VALUES ($1, $2, $3, $4) 
+                     RETURNING *`,
+                    [idUsuario, nome.trim(), sexo, observacoes]
                 );
                 
                 const petCriado = result.rows[0];
-                console.log(`✅ Pet padrão criado (sem FKs) para usuário ${idUsuario}:`, petCriado);
+                console.log(`✅ Pet criado (sem FKs) para usuário ${idUsuario}:`, petCriado);
                 return petCriado;
             } catch (secondError) {
                 console.error('❌ Erro também na segunda tentativa:', secondError);

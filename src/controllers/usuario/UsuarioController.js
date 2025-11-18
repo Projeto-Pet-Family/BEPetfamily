@@ -62,6 +62,8 @@ async function inserirUsuario(req, res) {
             desativado = false,
             esqueceuSenha = false,
             dataCadastro = new Date(),
+            // ✅ NOVO: Dados do pet vindo do request
+            petData = {}
         } = req.body;
 
         // Hash da senha
@@ -83,25 +85,43 @@ async function inserirUsuario(req, res) {
         const novoUsuario = userResult.rows[0];
         const idUsuario = novoUsuario.idusuario;
 
-        // ✅ AGORA CRIAR O PET PADRÃO PARA O NOVO USUÁRIO
-        console.log(`🔄 Criando pet padrão para o novo usuário ID: ${idUsuario}`);
+        // ✅ CORREÇÃO: Criar pet com os dados fornecidos pelo usuário
+        console.log(`🔄 Criando pet para o novo usuário ID: ${idUsuario}`);
         
         try {
-            const petPadrao = await inserirPetPadraoAoRegistrar(idUsuario, client);
-            console.log('✅ Pet padrão criado com sucesso:', petPadrao);
+            // Verifica se há dados suficientes para criar o pet
+            const hasPetData = petData && 
+                              petData.nome && 
+                              petData.nome.trim() !== '' && 
+                              petData.sexo;
+            
+            if (hasPetData) {
+                const petCriado = await inserirPetPadraoAoRegistrar(idUsuario, petData, client);
+                console.log('✅ Pet criado com sucesso:', petCriado);
+                
+                // Adiciona info do pet na resposta
+                novoUsuario.petCriado = {
+                    idPet: petCriado.idpet,
+                    nome: petCriado.nome,
+                    sexo: petCriado.sexo
+                };
+            } else {
+                console.log('ℹ️ Nenhum dado de pet fornecido ou dados insuficientes');
+            }
         } catch (petError) {
-            console.error('❌ Erro ao criar pet padrão:', petError);
+            console.error('❌ Erro ao criar pet:', petError);
             // Não fazemos rollback aqui - o usuário foi criado, só o pet que falhou
-            // Isso evita que o cadastro completo falhe por causa do pet
         }
 
         // Commit da transação
         await client.query('COMMIT');
 
         const response = {
-            message: 'Usuário criado com sucesso!',
+            success: true,
+            message: 'Usuário criado com sucesso!' + (novoUsuario.petCriado ? ' e pet cadastrado!' : ''),
             data: {
                 usuario: novoUsuario,
+                idusuario: novoUsuario.idusuario // ✅ Garante que o ID está disponível
             }
         };
 
@@ -115,11 +135,13 @@ async function inserirUsuario(req, res) {
 
         if (error.code === '23505') {
             return res.status(409).json({
+                success: false,
                 message: 'CPF ou email já cadastrado'
             });
         }
 
         res.status(500).json({
+            success: false,
             message: 'Erro ao criar o usuário, confira o console'
         });
         console.log(error);
