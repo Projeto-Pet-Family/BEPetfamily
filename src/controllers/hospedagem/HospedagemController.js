@@ -72,7 +72,7 @@ async function buscarHospedagemPorId(req, res) {
                 est.sigla,
                 est."idEstado"
             FROM Hospedagem h
-            JOIN Endereco e ON h."idEndereco" = e."idEndereco"
+            JOIN Endereco e ON h."idendereco" = e."idendereco"
             JOIN CEP cep ON e."idCEP" = cep."idCEP"
             JOIN Logradouro log ON e."idLogradouro" = log."idLogradouro"
             JOIN Bairro b ON log."idBairro" = b."idBairro"
