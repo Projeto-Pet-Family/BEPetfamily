@@ -54,7 +54,7 @@ async function buscarHospedagemPorId(req, res) {
         
         const query = `
             SELECT 
-                h."idHospedagem",
+                h."idhospedagem",
                 h.nome,
                 h.valor_diaria,
                 e."idendereco",
