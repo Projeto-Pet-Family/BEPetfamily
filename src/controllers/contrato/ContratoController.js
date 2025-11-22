@@ -224,6 +224,7 @@ async function criarContrato(req, res) {
             client.query('SELECT idhospedagem FROM hospedagem WHERE idhospedagem = $1', [idHospedagem]),
             client.query('SELECT idusuario FROM usuario WHERE idusuario = $1', [idUsuario]),
             pets.length > 0 ? client.query('SELECT idpet FROM pet WHERE idpet = ANY($1) AND idusuario = $2', [pets, idUsuario]) : { rows: [] },
+            // MODIFICAÇÃO AQUI: Só valida serviços se foram fornecidos
             servicos.length > 0 ? client.query('SELECT idservico FROM servico WHERE idservico = ANY($1) AND idhospedagem = $2 AND ativo = true', [servicos.map(s => s.idservico), idHospedagem]) : { rows: [] },
             // Verificar se existe um contrato IDÊNTICO (mesma hospedagem, usuário, datas e status ativo)
             client.query(
@@ -242,7 +243,11 @@ async function criarContrato(req, res) {
         if (hospedagem.rows.length === 0) throw new Error('Hospedagem não encontrada');
         if (usuario.rows.length === 0) throw new Error('Usuário não encontrado');
         if (pets.length > 0 && petsValidos.rows.length !== pets.length) throw new Error('Um ou mais pets não pertencem ao usuário');
-        if (servicos.length > 0 && servicosValidos.rows.length !== servicos.length) throw new Error('Um ou mais serviços não estão disponíveis para esta hospedagem');
+        
+        // MODIFICAÇÃO AQUI: Só valida serviços se foram fornecidos
+        if (servicos.length > 0 && servicosValidos.rows.length !== servicos.length) {
+            throw new Error('Um ou mais serviços não estão disponíveis para esta hospedagem');
+        }
         
         // Apenas impedir contrato IDÊNTICO
         if (contratoIdentico.rows.length > 0) {
@@ -257,13 +262,13 @@ async function criarContrato(req, res) {
 
         const idContrato = contratoResult.rows[0].idcontrato;
 
-        // Inserir pets em lote
+        // Inserir pets em lote (se fornecidos)
         if (pets.length > 0) {
             const petsValues = pets.map(idPet => `(${idContrato}, ${idPet})`).join(',');
             await client.query(`INSERT INTO contrato_pet (idcontrato, idpet) VALUES ${petsValues}`);
         }
 
-        // Inserir serviços em lote
+        // MODIFICAÇÃO AQUI: Inserir serviços em lote (se fornecidos)
         if (servicos.length > 0) {
             const servicosIds = servicos.map(s => s.idservico);
             const precosResult = await client.query('SELECT idservico, preco FROM servico WHERE idservico = ANY($1)', [servicosIds]);
@@ -475,14 +480,8 @@ async function excluirServicoContrato(req, res) {
         if (contrato.rows.length === 0) return res.status(404).json({ message: 'Contrato não encontrado' });
         if (servico.rows.length === 0) return res.status(404).json({ message: 'Serviço não encontrado no contrato' });
 
-        // Verificar se é o último serviço
-        const servicosCount = await client.query('SELECT COUNT(*) as total FROM contratoservico WHERE idcontrato = $1', [idContrato]);
-        if (parseInt(servicosCount.rows[0].total) <= 1) {
-            return res.status(400).json({ 
-                message: 'Não é possível remover o último serviço do contrato',
-                error: 'ULTIMO_SERVICO'
-            });
-        }
+        // MODIFICAÇÃO AQUI: Removida a validação que impedia remover o último serviço
+        // Agora é permitido remover qualquer serviço, inclusive o último
 
         // Verificar se o contrato permite edição (status não editáveis)
         const contratoAtual = contrato.rows[0];
