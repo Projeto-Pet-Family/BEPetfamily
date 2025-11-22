@@ -57,28 +57,28 @@ async function buscarHospedagemPorId(req, res) {
                 h."idHospedagem",
                 h.nome,
                 h.valor_diaria,
-                e."idEndereco",
+                e."idendereco",
                 e.numero,
                 e.complemento,
                 cep.codigo as "CEP",
-                cep."idCEP",
+                cep."idcep",
                 log.nome as logradouro,
-                log."idLogradouro",
+                log."idlogradouro",
                 b.nome as bairro,
-                b."idBairro",
+                b."idbairro",
                 cid.nome as cidade,
-                cid."idCidade",
+                cid."idcidade",
                 est.nome as estado,
                 est.sigla,
-                est."idEstado"
+                est."idestado"
             FROM Hospedagem h
             JOIN Endereco e ON h."idendereco" = e."idendereco"
-            JOIN CEP cep ON e."idCEP" = cep."idCEP"
-            JOIN Logradouro log ON e."idLogradouro" = log."idLogradouro"
-            JOIN Bairro b ON log."idBairro" = b."idBairro"
-            JOIN Cidade cid ON b."idCidade" = cid."idCidade"
-            JOIN Estado est ON cid."idEstado" = est."idEstado"
-            WHERE h."idHospedagem" = $1
+            JOIN CEP cep ON e."idcep" = cep."idcep"
+            JOIN Logradouro log ON e."idlogradouro" = log."idlogradouro"
+            JOIN Bairro b ON log."idbairro" = b."idbairro"
+            JOIN Cidade cid ON b."iddidade" = cid."iddidade"
+            JOIN Estado est ON cid."idestado" = est."idestado"
+            WHERE h."idhospedagem" = $1
         `;
         
         const result = await client.query(query, [idHospedagem]);
