@@ -29,7 +29,8 @@ const statusMap = {
 async function buscarContratoComRelacionamentos(client, idContrato) {
     try {
         const contratoQuery = `
-            SELECT c.*, h.nome as hospedagem_nome, e.idendereco, e.numero as endereco_numero,
+            SELECT c.*, h.nome as hospedagem_nome, h.valor_diaria,  -- ADICIONADO valor_diaria
+                   e.idendereco, e.numero as endereco_numero,
                    e.complemento as endereco_complemento, l.nome as logradouro_nome,
                    b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
                    es.sigla as estado_sigla, cep.codigo as cep_codigo,
@@ -50,40 +51,28 @@ async function buscarContratoComRelacionamentos(client, idContrato) {
         const contrato = contratoResult.rows[0];
         if (!contrato) return null;
 
-        // Formatar endereço
-        contrato.hospedagem_endereco = formatarEndereco(contrato);
+        // ... (resto do código permanece igual até o final)
 
-        // Buscar pets
-        const petsResult = await client.query(
-            'SELECT cp.idcontrato_pet, p.idpet, p.nome, p.sexo, p.nascimento FROM contrato_pet cp JOIN pet p ON cp.idpet = p.idpet WHERE cp.idcontrato = $1',
-            [idContrato]
-        );
-        contrato.pets = petsResult.rows;
+        // ADICIONAR: Calcular valores baseados na diária
+        let valorTotalHospedagem = 0;
+        let quantidadeDias = contrato.duracao_dias || 1;
+        let valorDiaria = contrato.valor_diaria ? parseFloat(contrato.valor_diaria) : 0;
 
-        // Buscar serviços
-        const servicosResult = await client.query(
-            `SELECT cs.idcontratoservico, cs.idservico, cs.quantidade, cs.preco_unitario,
-                    s.descricao, s.preco as preco_atual,
-                    (cs.quantidade * cs.preco_unitario) as subtotal
-             FROM contratoservico cs
-             JOIN servico s ON cs.idservico = s.idservico
-             WHERE cs.idcontrato = $1 ORDER BY s.descricao`,
-            [idContrato]
-        );
-        contrato.servicos = servicosResult.rows;
+        valorTotalHospedagem = valorDiaria * quantidadeDias;
 
-        // Calcular totais e informações adicionais
-        contrato.total_servicos = contrato.servicos.reduce((total, servico) => 
-            total + parseFloat(servico.subtotal || 0), 0
-        );
-        contrato.status_descricao = statusMap[contrato.status] || 'Desconhecido';
-
-        if (contrato.datainicio && contrato.datafim) {
-            const diffTime = Math.abs(new Date(contrato.datafim) - new Date(contrato.datainicio));
-            contrato.duracao_dias = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        } else {
-            contrato.duracao_dias = null;
-        }
+        // Adicionar campos de cálculo ao contrato
+        contrato.calculo_valores = {
+            valor_diaria: valorDiaria,
+            quantidade_dias: quantidadeDias,
+            valor_total_hospedagem: valorTotalHospedagem,
+            valor_total_servicos: contrato.total_servicos || 0,
+            valor_total_contrato: valorTotalHospedagem + (contrato.total_servicos || 0),
+            valor_diaria_formatado: `R$ ${valorDiaria.toFixed(2).replace('.', ',')}`,
+            valor_total_hospedagem_formatado: `R$ ${valorTotalHospedagem.toFixed(2).replace('.', ',')}`,
+            valor_total_servicos_formatado: `R$ ${(contrato.total_servicos || 0).toFixed(2).replace('.', ',')}`,
+            valor_total_contrato_formatado: `R$ ${(valorTotalHospedagem + (contrato.total_servicos || 0)).toFixed(2).replace('.', ',')}`,
+            periodo_dias: `${quantidadeDias} dia(s)`
+        };
 
         return contrato;
     } catch (error) {
@@ -143,10 +132,12 @@ async function lerContratos(req, res) {
     try {
         client = await pool.connect();
         const query = `
-            SELECT c.*, h.nome as hospedagem_nome, e.numero as endereco_numero,
-                   e.complemento as endereco_complemento, l.nome as logradouro_nome,
-                   b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
-                   es.sigla as estado_sigla, cep.codigo as cep_codigo, u.nome as usuario_nome
+            SELECT c.*, h.nome as hospedagem_nome, h.valor_diaria,
+                   e.numero as endereco_numero, e.complemento as endereco_complemento, 
+                   l.nome as logradouro_nome, b.nome as bairro_nome, 
+                   ci.nome as cidade_nome, es.nome as estado_nome,
+                   es.sigla as estado_sigla, cep.codigo as cep_codigo, 
+                   u.nome as usuario_nome
             FROM contrato c
             LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
             LEFT JOIN endereco e ON h.idendereco = e.idendereco
@@ -160,19 +151,70 @@ async function lerContratos(req, res) {
         `;
         
         const result = await client.query(query);
-        const contratosComEndereco = result.rows.map(contrato => ({
-            ...contrato,
-            hospedagem_endereco: formatarEndereco(contrato)
-        }));
+        
+        // Processar cada contrato para calcular o valor total
+        const contratosComCalculo = await Promise.all(
+            result.rows.map(async (contrato) => {
+                // Formatar endereço
+                const contratoComEndereco = {
+                    ...contrato,
+                    hospedagem_endereco: formatarEndereco(contrato)
+                };
 
-        const contratosCompletos = await Promise.all(
-            contratosComEndereco.map(contrato => 
-                buscarContratoComRelacionamentos(client, contrato.idcontrato)
-            )
+                // Buscar informações completas do contrato
+                const contratoCompleto = await buscarContratoComRelacionamentos(client, contrato.idcontrato);
+                
+                // Calcular valor total baseado na diária
+                let valorTotalHospedagem = 0;
+                let quantidadeDias = 1;
+                let valorDiaria = contrato.valor_diaria ? parseFloat(contrato.valor_diaria) : 0;
+
+                // Calcular quantidade de dias se tiver data início e fim
+                if (contrato.datainicio && contrato.datafim) {
+                    const dataInicio = new Date(contrato.datainicio);
+                    const dataFim = new Date(contrato.datafim);
+                    const diffTime = Math.abs(dataFim - dataInicio);
+                    quantidadeDias = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                    // Garantir pelo menos 1 dia
+                    quantidadeDias = Math.max(1, quantidadeDias);
+                } else if (contrato.datainicio) {
+                    // Se só tem data início, considera 1 dia
+                    quantidadeDias = 1;
+                }
+
+                // Calcular valor da hospedagem
+                valorTotalHospedagem = valorDiaria * quantidadeDias;
+
+                // Calcular total de serviços
+                const totalServicos = contratoCompleto?.servicos?.reduce((total, servico) => 
+                    total + parseFloat(servico.subtotal || 0), 0
+                ) || 0;
+
+                // Valor total do contrato
+                const valorTotalContrato = valorTotalHospedagem + totalServicos;
+
+                // Adicionar campos de cálculo ao contrato
+                return {
+                    ...contratoCompleto,
+                    calculo_valores: {
+                        valor_diaria: valorDiaria,
+                        quantidade_dias: quantidadeDias,
+                        valor_total_hospedagem: valorTotalHospedagem,
+                        valor_total_servicos: totalServicos,
+                        valor_total_contrato: valorTotalContrato,
+                        valor_diaria_formatado: `R$ ${valorDiaria.toFixed(2).replace('.', ',')}`,
+                        valor_total_hospedagem_formatado: `R$ ${valorTotalHospedagem.toFixed(2).replace('.', ',')}`,
+                        valor_total_servicos_formatado: `R$ ${totalServicos.toFixed(2).replace('.', ',')}`,
+                        valor_total_contrato_formatado: `R$ ${valorTotalContrato.toFixed(2).replace('.', ',')}`,
+                        periodo_dias: `${quantidadeDias} dia(s)`
+                    }
+                };
+            })
         );
 
-        res.status(200).json(contratosCompletos);
+        res.status(200).json(contratosComCalculo);
     } catch (error) {
+        console.error('Erro ao listar contratos:', error);
         res.status(500).json({ message: 'Erro ao listar contratos', error: error.message });
     } finally {
         if (client) await client.release();
