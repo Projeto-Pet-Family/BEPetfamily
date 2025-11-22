@@ -76,7 +76,7 @@ async function buscarHospedagemPorId(req, res) {
             JOIN CEP cep ON e."idcep" = cep."idcep"
             JOIN Logradouro log ON e."idlogradouro" = log."idlogradouro"
             JOIN Bairro b ON log."idbairro" = b."idbairro"
-            JOIN Cidade cid ON b."iddidade" = cid."iddidade"
+            JOIN Cidade cid ON b."idcidade" = cid."idcidade"
             JOIN Estado est ON cid."idestado" = est."idestado"
             WHERE h."idhospedagem" = $1
         `;
