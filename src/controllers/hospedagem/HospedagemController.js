@@ -10,6 +10,7 @@ async function lerHospedagens(req, res) {
             SELECT 
                 h.idHospedagem,
                 h.nome,
+                h.valor_diaria,
                 e.idendereco,
                 e.numero,
                 e.complemento,
@@ -55,6 +56,7 @@ async function buscarHospedagemPorId(req, res) {
             SELECT 
                 h."idHospedagem",
                 h.nome,
+                h.valor_diaria,
                 e."idEndereco",
                 e.numero,
                 e.complemento,
@@ -107,13 +109,21 @@ async function criarHospedagem(req, res) {
 
         const { 
             nome,
-            idendereco
+            idendereco,
+            valor_diaria
         } = req.body;
 
         // Validar campos obrigatórios
-        if (!nome || !idendereco) {
+        if (!nome || !idendereco || valor_diaria === undefined) {
             return res.status(400).json({
-                message: 'Nome e ID do endereço são campos obrigatórios'
+                message: 'Nome, ID do endereço e valor da diária são campos obrigatórios'
+            });
+        }
+
+        // Validar valor da diária
+        if (valor_diaria < 0) {
+            return res.status(400).json({
+                message: 'O valor da diária não pode ser negativo'
             });
         }
 
@@ -127,8 +137,8 @@ async function criarHospedagem(req, res) {
 
         // Inserir no banco de dados
         const result = await client.query(
-            'INSERT INTO Hospedagem (nome, idEndereco) VALUES ($1, $2) RETURNING idHospedagem',
-            [nome, idendereco]
+            'INSERT INTO Hospedagem (nome, idEndereco, valor_diaria) VALUES ($1, $2, $3) RETURNING idHospedagem',
+            [nome, idendereco, valor_diaria]
         );
 
         // Buscar os dados completos da hospedagem criada
@@ -136,6 +146,7 @@ async function criarHospedagem(req, res) {
             SELECT 
                 h.idhospedagem,
                 h.nome,
+                h.valor_diaria,
                 e.idendereco,
                 e.numero,
                 e.complemento,
@@ -189,7 +200,8 @@ async function atualizarHospedagem(req, res) {
 
         const {
             nome,
-            idEndereco
+            idEndereco,
+            valor_diaria
         } = req.body;
 
         // Verificar se a hospedagem existe
@@ -208,10 +220,18 @@ async function atualizarHospedagem(req, res) {
             }
         }
 
+        // Validar valor da diária, se fornecido
+        if (valor_diaria !== undefined && valor_diaria < 0) {
+            return res.status(400).json({
+                message: 'O valor da diária não pode ser negativo'
+            });
+        }
+
         // Construir a query dinamicamente
         const updateFields = {};
         if (nome) updateFields.nome = nome;
         if (idEndereco) updateFields.idEndereco = idEndereco;
+        if (valor_diaria !== undefined) updateFields.valor_diaria = valor_diaria;
 
         if (Object.keys(updateFields).length === 0) {
             return res.status(400).json({ message: 'Nenhum campo válido para atualização fornecido' });
@@ -240,6 +260,7 @@ async function atualizarHospedagem(req, res) {
             SELECT 
                 h."idHospedagem",
                 h.nome,
+                h.valor_diaria,
                 e."idEndereco",
                 e.numero,
                 e.complemento,
@@ -296,6 +317,7 @@ async function excluirHospedagem(req, res) {
             SELECT 
                 h."idHospedagem",
                 h.nome,
+                h.valor_diaria,
                 e."idEndereco",
                 e.numero,
                 e.complemento,

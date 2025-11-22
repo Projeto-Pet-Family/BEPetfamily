@@ -768,6 +768,159 @@ async function obterTransicoesStatus(req, res) {
     }
 }
 
+// NOVO MÉTODO: Calcular valor total do contrato baseado na diária da hospedagem
+async function calcularValorContrato(req, res) {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idContrato } = req.params;
+
+        // Buscar contrato com informações da hospedagem
+        const contratoQuery = `
+            SELECT 
+                c.idcontrato,
+                c.datainicio,
+                c.datafim,
+                h.idhospedagem,
+                h.nome as hospedagem_nome,
+                h.valor_diaria,
+                COUNT(cp.idpet) as quantidade_pets
+            FROM contrato c
+            JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+            LEFT JOIN contrato_pet cp ON c.idcontrato = cp.idcontrato
+            WHERE c.idcontrato = $1
+            GROUP BY c.idcontrato, h.idhospedagem, h.nome, h.valor_diaria
+        `;
+
+        const contratoResult = await client.query(contratoQuery, [idContrato]);
+        
+        if (contratoResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Contrato não encontrado' });
+        }
+
+        const contrato = contratoResult.rows[0];
+
+        // Validar se tem valor_diaria configurado
+        if (!contrato.valor_diaria || contrato.valor_diaria <= 0) {
+            return res.status(400).json({ 
+                message: 'Hospedagem não possui valor de diária configurado',
+                error: 'VALOR_DIARIA_NAO_CONFIGURADO'
+            });
+        }
+
+        // Validar datas
+        if (!contrato.datainicio) {
+            return res.status(400).json({ 
+                message: 'Contrato não possui data de início definida',
+                error: 'DATA_INICIO_NAO_DEFINIDA'
+            });
+        }
+
+        // Calcular quantidade de dias
+        let quantidadeDias = 1; // padrão 1 dia se não tiver data fim
+        
+        if (contrato.datafim) {
+            const dataInicio = new Date(contrato.datainicio);
+            const dataFim = new Date(contrato.datafim);
+            
+            // Validar se data fim é maior que data início
+            if (dataFim <= dataInicio) {
+                return res.status(400).json({ 
+                    message: 'Data fim deve ser posterior à data início',
+                    error: 'DATA_FIM_INVALIDA'
+                });
+            }
+
+            // Calcular diferença em dias
+            const diffTime = Math.abs(dataFim - dataInicio);
+            quantidadeDias = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            
+            // Garantir pelo menos 1 dia
+            quantidadeDias = Math.max(1, quantidadeDias);
+        }
+
+        // Calcular valores
+        const valorDiaria = parseFloat(contrato.valor_diaria);
+        const valorTotalHospedagem = valorDiaria * quantidadeDias;
+        const quantidadePets = parseInt(contrato.quantidade_pets) || 0;
+
+        // Buscar serviços adicionais
+        const servicosQuery = `
+            SELECT 
+                cs.idservico,
+                cs.quantidade,
+                cs.preco_unitario,
+                s.descricao,
+                (cs.quantidade * cs.preco_unitario) as subtotal
+            FROM contratoservico cs
+            JOIN servico s ON cs.idservico = s.idservico
+            WHERE cs.idcontrato = $1
+            ORDER BY s.descricao
+        `;
+
+        const servicosResult = await client.query(servicosQuery, [idContrato]);
+        const servicos = servicosResult.rows;
+
+        // Calcular total de serviços
+        const totalServicos = servicos.reduce((total, servico) => 
+            total + parseFloat(servico.subtotal || 0), 0
+        );
+
+        // Calcular valor total do contrato
+        const valorTotalContrato = valorTotalHospedagem + totalServicos;
+
+        // Formatar resposta
+        const resposta = {
+            contrato: {
+                id: contrato.idcontrato,
+                dataInicio: contrato.datainicio,
+                dataFim: contrato.datafim,
+                quantidadeDias: quantidadeDias,
+                quantidadePets: quantidadePets
+            },
+            hospedagem: {
+                id: contrato.idhospedagem,
+                nome: contrato.hospedagem_nome,
+                valorDiaria: valorDiaria
+            },
+            calculoHospedagem: {
+                valorDiaria: valorDiaria,
+                quantidadeDias: quantidadeDias,
+                subtotal: valorTotalHospedagem,
+                descricao: `${quantidadeDias} diária(s) × R$ ${valorDiaria.toFixed(2)}`
+            },
+            servicos: {
+                itens: servicos,
+                total: totalServicos,
+                quantidade: servicos.length
+            },
+            totais: {
+                subtotalHospedagem: valorTotalHospedagem,
+                subtotalServicos: totalServicos,
+                valorTotal: valorTotalContrato
+            },
+            formatado: {
+                valorDiaria: `R$ ${valorDiaria.toFixed(2).replace('.', ',')}`,
+                subtotalHospedagem: `R$ ${valorTotalHospedagem.toFixed(2).replace('.', ',')}`,
+                subtotalServicos: `R$ ${totalServicos.toFixed(2).replace('.', ',')}`,
+                valorTotal: `R$ ${valorTotalContrato.toFixed(2).replace('.', ',')}`,
+                periodo: `${quantidadeDias} dia(s)`
+            }
+        };
+
+        res.status(200).json(resposta);
+
+    } catch (error) {
+        console.error('Erro ao calcular valor do contrato:', error);
+        res.status(500).json({ 
+            message: 'Erro ao calcular valor do contrato', 
+            error: error.message 
+        });
+    } finally {
+        if (client) await client.release();
+    }
+}
+
 module.exports = {
     lerContratos,
     buscarContratoPorId,
@@ -884,5 +1037,6 @@ module.exports = {
     excluirPetContrato,
     buscarContratoComRelacionamentos,
     alterarStatusContrato,
-    obterTransicoesStatus
+    obterTransicoesStatus,
+    calcularValorContrato
 };
