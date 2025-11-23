@@ -29,7 +29,7 @@ const statusMap = {
 async function buscarContratoComRelacionamentos(client, idContrato) {
     try {
         const contratoQuery = `
-            SELECT c.*, h.nome as hospedagem_nome, h.valor_diaria,  -- ADICIONADO valor_diaria
+            SELECT c.*, h.nome as hospedagem_nome, h.valor_diaria,
                    e.idendereco, e.numero as endereco_numero,
                    e.complemento as endereco_complemento, l.nome as logradouro_nome,
                    b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
@@ -51,9 +51,48 @@ async function buscarContratoComRelacionamentos(client, idContrato) {
         const contrato = contratoResult.rows[0];
         if (!contrato) return null;
 
-        // ... (resto do código permanece igual até o final)
+        // Formatar endereço
+        contrato.hospedagem_endereco = formatarEndereco(contrato);
 
-        // ADICIONAR: Calcular valores baseados na diária
+        // Buscar pets do contrato
+        const petsResult = await client.query(
+            `SELECT cp.idcontrato_pet, p.idpet, p.nome, p.sexo, p.nascimento, 
+                    p.idraca, p.idporte, p.idespecie
+             FROM contrato_pet cp 
+             JOIN pet p ON cp.idpet = p.idpet 
+             WHERE cp.idcontrato = $1`,
+            [idContrato]
+        );
+        contrato.pets = petsResult.rows;
+
+        // Buscar serviços do contrato
+        const servicosResult = await client.query(
+            `SELECT cs.idcontratoservico, cs.idservico, cs.quantidade, cs.preco_unitario,
+                    s.descricao, s.preco as preco_atual,
+                    (cs.quantidade * cs.preco_unitario) as subtotal
+             FROM contratoservico cs
+             JOIN servico s ON cs.idservico = s.idservico
+             WHERE cs.idcontrato = $1 
+             ORDER BY s.descricao`,
+            [idContrato]
+        );
+        contrato.servicos = servicosResult.rows;
+
+        // Calcular totais e informações adicionais
+        contrato.total_servicos = contrato.servicos.reduce((total, servico) => 
+            total + parseFloat(servico.subtotal || 0), 0
+        );
+        contrato.status_descricao = statusMap[contrato.status] || 'Desconhecido';
+
+        // Calcular duração em dias
+        if (contrato.datainicio && contrato.datafim) {
+            const diffTime = Math.abs(new Date(contrato.datafim) - new Date(contrato.datainicio));
+            contrato.duracao_dias = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        } else {
+            contrato.duracao_dias = null;
+        }
+
+        // Calcular valores baseados na diária
         let valorTotalHospedagem = 0;
         let quantidadeDias = contrato.duracao_dias || 1;
         let valorDiaria = contrato.valor_diaria ? parseFloat(contrato.valor_diaria) : 0;
@@ -152,67 +191,17 @@ async function lerContratos(req, res) {
         
         const result = await client.query(query);
         
-        // Processar cada contrato para calcular o valor total
-        const contratosComCalculo = await Promise.all(
+        // Processar cada contrato para incluir pets, serviços e calcular valores
+        const contratosCompletos = await Promise.all(
             result.rows.map(async (contrato) => {
-                // Formatar endereço
-                const contratoComEndereco = {
-                    ...contrato,
-                    hospedagem_endereco: formatarEndereco(contrato)
-                };
-
-                // Buscar informações completas do contrato
+                // Buscar informações completas do contrato (incluindo pets e serviços)
                 const contratoCompleto = await buscarContratoComRelacionamentos(client, contrato.idcontrato);
                 
-                // Calcular valor total baseado na diária
-                let valorTotalHospedagem = 0;
-                let quantidadeDias = 1;
-                let valorDiaria = contrato.valor_diaria ? parseFloat(contrato.valor_diaria) : 0;
-
-                // Calcular quantidade de dias se tiver data início e fim
-                if (contrato.datainicio && contrato.datafim) {
-                    const dataInicio = new Date(contrato.datainicio);
-                    const dataFim = new Date(contrato.datafim);
-                    const diffTime = Math.abs(dataFim - dataInicio);
-                    quantidadeDias = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                    // Garantir pelo menos 1 dia
-                    quantidadeDias = Math.max(1, quantidadeDias);
-                } else if (contrato.datainicio) {
-                    // Se só tem data início, considera 1 dia
-                    quantidadeDias = 1;
-                }
-
-                // Calcular valor da hospedagem
-                valorTotalHospedagem = valorDiaria * quantidadeDias;
-
-                // Calcular total de serviços
-                const totalServicos = contratoCompleto?.servicos?.reduce((total, servico) => 
-                    total + parseFloat(servico.subtotal || 0), 0
-                ) || 0;
-
-                // Valor total do contrato
-                const valorTotalContrato = valorTotalHospedagem + totalServicos;
-
-                // Adicionar campos de cálculo ao contrato
-                return {
-                    ...contratoCompleto,
-                    calculo_valores: {
-                        valor_diaria: valorDiaria,
-                        quantidade_dias: quantidadeDias,
-                        valor_total_hospedagem: valorTotalHospedagem,
-                        valor_total_servicos: totalServicos,
-                        valor_total_contrato: valorTotalContrato,
-                        valor_diaria_formatado: `R$ ${valorDiaria.toFixed(2).replace('.', ',')}`,
-                        valor_total_hospedagem_formatado: `R$ ${valorTotalHospedagem.toFixed(2).replace('.', ',')}`,
-                        valor_total_servicos_formatado: `R$ ${totalServicos.toFixed(2).replace('.', ',')}`,
-                        valor_total_contrato_formatado: `R$ ${valorTotalContrato.toFixed(2).replace('.', ',')}`,
-                        periodo_dias: `${quantidadeDias} dia(s)`
-                    }
-                };
+                return contratoCompleto;
             })
         );
 
-        res.status(200).json(contratosComCalculo);
+        res.status(200).json(contratosCompletos);
     } catch (error) {
         console.error('Erro ao listar contratos:', error);
         res.status(500).json({ message: 'Erro ao listar contratos', error: error.message });
@@ -266,9 +255,7 @@ async function criarContrato(req, res) {
             client.query('SELECT idhospedagem FROM hospedagem WHERE idhospedagem = $1', [idHospedagem]),
             client.query('SELECT idusuario FROM usuario WHERE idusuario = $1', [idUsuario]),
             pets.length > 0 ? client.query('SELECT idpet FROM pet WHERE idpet = ANY($1) AND idusuario = $2', [pets, idUsuario]) : { rows: [] },
-            // MODIFICAÇÃO AQUI: Só valida serviços se foram fornecidos
             servicos.length > 0 ? client.query('SELECT idservico FROM servico WHERE idservico = ANY($1) AND idhospedagem = $2 AND ativo = true', [servicos.map(s => s.idservico), idHospedagem]) : { rows: [] },
-            // Verificar se existe um contrato IDÊNTICO (mesma hospedagem, usuário, datas e status ativo)
             client.query(
                 `SELECT idcontrato FROM contrato 
                  WHERE idhospedagem = $1 
@@ -286,7 +273,6 @@ async function criarContrato(req, res) {
         if (usuario.rows.length === 0) throw new Error('Usuário não encontrado');
         if (pets.length > 0 && petsValidos.rows.length !== pets.length) throw new Error('Um ou mais pets não pertencem ao usuário');
         
-        // MODIFICAÇÃO AQUI: Só valida serviços se foram fornecidos
         if (servicos.length > 0 && servicosValidos.rows.length !== servicos.length) {
             throw new Error('Um ou mais serviços não estão disponíveis para esta hospedagem');
         }
@@ -310,7 +296,7 @@ async function criarContrato(req, res) {
             await client.query(`INSERT INTO contrato_pet (idcontrato, idpet) VALUES ${petsValues}`);
         }
 
-        // MODIFICAÇÃO AQUI: Inserir serviços em lote (se fornecidos)
+        // Inserir serviços em lote (se fornecidos)
         if (servicos.length > 0) {
             const servicosIds = servicos.map(s => s.idservico);
             const precosResult = await client.query('SELECT idservico, preco FROM servico WHERE idservico = ANY($1)', [servicosIds]);
@@ -378,7 +364,6 @@ async function atualizarContrato(req, res) {
     }
 }
 
-// NOVO MÉTODO: Atualizar datas do contrato
 async function atualizarDatasContrato(req, res) {
     let client;
     try {
@@ -506,7 +491,6 @@ async function excluirContrato(req, res) {
     }
 }
 
-// Funções para serviços e pets (mantidas similares às originais)
 async function excluirServicoContrato(req, res) {
     let client;
     try {
@@ -521,9 +505,6 @@ async function excluirServicoContrato(req, res) {
 
         if (contrato.rows.length === 0) return res.status(404).json({ message: 'Contrato não encontrado' });
         if (servico.rows.length === 0) return res.status(404).json({ message: 'Serviço não encontrado no contrato' });
-
-        // MODIFICAÇÃO AQUI: Removida a validação que impedia remover o último serviço
-        // Agora é permitido remover qualquer serviço, inclusive o último
 
         // Verificar se o contrato permite edição (status não editáveis)
         const contratoAtual = contrato.rows[0];
@@ -609,7 +590,6 @@ async function excluirPetContrato(req, res) {
     }
 }
 
-// NOVO MÉTODO: Alterar status do contrato com validações específicas
 async function alterarStatusContrato(req, res) {
     let client;
     try {
@@ -649,9 +629,9 @@ async function alterarStatusContrato(req, res) {
             'em_aprovacao': ['aprovado', 'negado', 'cancelado'],
             'aprovado': ['em_execucao', 'cancelado'],
             'em_execucao': ['concluido', 'cancelado'],
-            'concluido': [], // Não permite alteração após conclusão
-            'negado': [], // Não permite alteração após negação
-            'cancelado': [] // Não permite alteração após cancelamento
+            'concluido': [],
+            'negado': [],
+            'cancelado': []
         };
 
         // Verificar se a transição é permitida
@@ -723,7 +703,6 @@ async function alterarStatusContrato(req, res) {
         
         // Se necessário, registrar o motivo (para negados)
         if (status === 'negado' && motivo) {
-            // Aqui você pode criar uma tabela de log de status se necessário
             console.log(`Contrato ${idContrato} negado. Motivo: ${motivo}`);
         }
 
@@ -754,7 +733,6 @@ async function alterarStatusContrato(req, res) {
     }
 }
 
-// Método para obter transições de status permitidas
 async function obterTransicoesStatus(req, res) {
     let client;
     try {
@@ -809,7 +787,6 @@ async function obterTransicoesStatus(req, res) {
     }
 }
 
-// NOVO MÉTODO: Calcular valor total do contrato baseado na diária da hospedagem
 async function calcularValorContrato(req, res) {
     let client;
     try {
@@ -858,7 +835,7 @@ async function calcularValorContrato(req, res) {
         }
 
         // Calcular quantidade de dias
-        let quantidadeDias = 1; // padrão 1 dia se não tiver data fim
+        let quantidadeDias = 1;
         
         if (contrato.datafim) {
             const dataInicio = new Date(contrato.datainicio);
@@ -875,8 +852,6 @@ async function calcularValorContrato(req, res) {
             // Calcular diferença em dias
             const diffTime = Math.abs(dataFim - dataInicio);
             quantidadeDias = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            
-            // Garantir pelo menos 1 dia
             quantidadeDias = Math.max(1, quantidadeDias);
         }
 
@@ -962,118 +937,128 @@ async function calcularValorContrato(req, res) {
     }
 }
 
+async function buscarContratosPorUsuario(req, res) {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idUsuario } = req.params;
+        
+        const usuario = await client.query('SELECT idusuario FROM usuario WHERE idusuario = $1', [idUsuario]);
+        if (usuario.rows.length === 0) return res.status(404).json({ message: 'Usuário não encontrado' });
+
+        const query = `
+            SELECT c.*, h.nome as hospedagem_nome, e.numero as endereco_numero,
+                   e.complemento as endereco_complemento, l.nome as logradouro_nome,
+                   b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
+                   es.sigla as estado_sigla, cep.codigo as cep_codigo
+            FROM contrato c
+            LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+            LEFT JOIN endereco e ON h.idendereco = e.idendereco
+            LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
+            LEFT JOIN bairro b ON l.idbairro = b.idbairro
+            LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
+            LEFT JOIN estado es ON ci.idestado = es.idestado
+            LEFT JOIN cep ON e.idcep = cep.idcep
+            WHERE c.idusuario = $1
+            ORDER BY c.datainicio DESC, c.datacriacao DESC
+        `;
+
+        const result = await client.query(query, [idUsuario]);
+        
+        // Processar cada contrato para incluir pets e serviços
+        const contratosCompletos = await Promise.all(
+            result.rows.map(async (contrato) => {
+                const contratoComEndereco = {
+                    ...contrato,
+                    hospedagem_endereco: formatarEndereco(contrato)
+                };
+
+                // Buscar informações completas do contrato
+                const contratoCompleto = await buscarContratoComRelacionamentos(client, contrato.idcontrato);
+                return contratoCompleto;
+            })
+        );
+
+        res.status(200).json(contratosCompletos);
+    } catch (error) {
+        res.status(500).json({ message: 'Erro ao buscar contratos do usuário', error: error.message });
+    } finally {
+        if (client) await client.release();
+    }
+}
+
+async function buscarContratosPorUsuarioEStatus(req, res) {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idUsuario, status } = req.query;
+
+        if (!idUsuario) return res.status(400).json({ message: 'idUsuario é obrigatório' });
+
+        const usuario = await client.query('SELECT idusuario FROM usuario WHERE idusuario = $1', [idUsuario]);
+        if (usuario.rows.length === 0) return res.status(404).json({ message: 'Usuário não encontrado' });
+
+        let query = `
+            SELECT c.*, h.nome as hospedagem_nome, e.numero as endereco_numero,
+                   e.complemento as endereco_complemento, l.nome as logradouro_nome,
+                   b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
+                   es.sigla as estado_sigla, cep.codigo as cep_codigo
+            FROM contrato c
+            LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+            LEFT JOIN endereco e ON h.idendereco = e.idendereco
+            LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
+            LEFT JOIN bairro b ON l.idbairro = b.idbairro
+            LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
+            LEFT JOIN estado es ON ci.idestado = es.idestado
+            LEFT JOIN cep ON e.idcep = cep.idcep
+            WHERE c.idusuario = $1
+        `;
+
+        const values = [idUsuario];
+        if (status) {
+            if (!validarStatus(status)) {
+                return res.status(400).json({ message: 'Status inválido' });
+            }
+            query += ` AND c.status = $2`;
+            values.push(status);
+        }
+
+        query += ` ORDER BY c.datainicio DESC, c.datacriacao DESC`;
+
+        const result = await client.query(query, values);
+        
+        // Processar cada contrato para incluir pets e serviços
+        const contratosCompletos = await Promise.all(
+            result.rows.map(async (contrato) => {
+                const contratoComEndereco = {
+                    ...contrato,
+                    hospedagem_endereco: formatarEndereco(contrato)
+                };
+
+                // Buscar informações completas do contrato
+                const contratoCompleto = await buscarContratoComRelacionamentos(client, contrato.idcontrato);
+                return contratoCompleto;
+            })
+        );
+
+        res.status(200).json(contratosCompletos);
+    } catch (error) {
+        res.status(500).json({ message: 'Erro ao buscar contratos do usuário', error: error.message });
+    } finally {
+        if (client) await client.release();
+    }
+}
+
 module.exports = {
     lerContratos,
     buscarContratoPorId,
     criarContrato,
     atualizarContrato,
-    atualizarDatasContrato, // NOVO MÉTODO
+    atualizarDatasContrato,
     atualizarStatusContrato,
     excluirContrato,
-    buscarContratosPorUsuario: async (req, res) => {
-        // Implementação similar às outras, mas focada em usuário específico
-        let client;
-        try {
-            client = await pool.connect();
-            const { idUsuario } = req.params;
-            
-            const usuario = await client.query('SELECT idusuario FROM usuario WHERE idusuario = $1', [idUsuario]);
-            if (usuario.rows.length === 0) return res.status(404).json({ message: 'Usuário não encontrado' });
-
-            const query = `
-                SELECT c.*, h.nome as hospedagem_nome, e.numero as endereco_numero,
-                       e.complemento as endereco_complemento, l.nome as logradouro_nome,
-                       b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
-                       es.sigla as estado_sigla, cep.codigo as cep_codigo
-                FROM contrato c
-                LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
-                LEFT JOIN endereco e ON h.idendereco = e.idendereco
-                LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
-                LEFT JOIN bairro b ON l.idbairro = b.idbairro
-                LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
-                LEFT JOIN estado es ON ci.idestado = es.idestado
-                LEFT JOIN cep ON e.idcep = cep.idcep
-                WHERE c.idusuario = $1
-                ORDER BY c.datainicio DESC, c.datacriacao DESC
-            `;
-
-            const result = await client.query(query, [idUsuario]);
-            const contratosComEndereco = result.rows.map(contrato => ({
-                ...contrato,
-                hospedagem_endereco: formatarEndereco(contrato)
-            }));
-
-            const contratosCompletos = await Promise.all(
-                contratosComEndereco.map(contrato => 
-                    buscarContratoComRelacionamentos(client, contrato.idcontrato)
-                )
-            );
-
-            res.status(200).json(contratosCompletos);
-        } catch (error) {
-            res.status(500).json({ message: 'Erro ao buscar contratos do usuário', error: error.message });
-        } finally {
-            if (client) await client.release();
-        }
-    },
-    buscarContratosPorUsuarioEStatus: async (req, res) => {
-        // Implementação similar, mas com filtro de status
-        let client;
-        try {
-            client = await pool.connect();
-            const { idUsuario, status } = req.query;
-
-            if (!idUsuario) return res.status(400).json({ message: 'idUsuario é obrigatório' });
-
-            const usuario = await client.query('SELECT idusuario FROM usuario WHERE idusuario = $1', [idUsuario]);
-            if (usuario.rows.length === 0) return res.status(404).json({ message: 'Usuário não encontrado' });
-
-            let query = `
-                SELECT c.*, h.nome as hospedagem_nome, e.numero as endereco_numero,
-                       e.complemento as endereco_complemento, l.nome as logradouro_nome,
-                       b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
-                       es.sigla as estado_sigla, cep.codigo as cep_codigo
-                FROM contrato c
-                LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
-                LEFT JOIN endereco e ON h.idendereco = e.idendereco
-                LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
-                LEFT JOIN bairro b ON l.idbairro = b.idbairro
-                LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
-                LEFT JOIN estado es ON ci.idestado = es.idestado
-                LEFT JOIN cep ON e.idcep = cep.idcep
-                WHERE c.idusuario = $1
-            `;
-
-            const values = [idUsuario];
-            if (status) {
-                if (!validarStatus(status)) {
-                    return res.status(400).json({ message: 'Status inválido' });
-                }
-                query += ` AND c.status = $2`;
-                values.push(status);
-            }
-
-            query += ` ORDER BY c.datainicio DESC, c.datacriacao DESC`;
-
-            const result = await client.query(query, values);
-            const contratosComEndereco = result.rows.map(contrato => ({
-                ...contrato,
-                hospedagem_endereco: formatarEndereco(contrato)
-            }));
-
-            const contratosCompletos = await Promise.all(
-                contratosComEndereco.map(contrato => 
-                    buscarContratoComRelacionamentos(client, contrato.idcontrato)
-                )
-            );
-
-            res.status(200).json(contratosCompletos);
-        } catch (error) {
-            res.status(500).json({ message: 'Erro ao buscar contratos do usuário', error: error.message });
-        } finally {
-            if (client) await client.release();
-        }
-    },
+    buscarContratosPorUsuario,
+    buscarContratosPorUsuarioEStatus,
     excluirServicoContrato,
     excluirPetContrato,
     buscarContratoComRelacionamentos,
