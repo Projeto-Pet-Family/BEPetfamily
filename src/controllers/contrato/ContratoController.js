@@ -793,7 +793,7 @@ async function calcularValorContrato(req, res) {
         client = await pool.connect();
         const { idContrato } = req.params;
 
-        // Buscar contrato com informações da hospedagem
+        // Buscar contrato com informações da hospedagem e pets
         const contratoQuery = `
             SELECT 
                 c.idcontrato,
@@ -855,10 +855,12 @@ async function calcularValorContrato(req, res) {
             quantidadeDias = Math.max(1, quantidadeDias);
         }
 
-        // Calcular valores
+        // Calcular valores com a nova fórmula: diária × dias × pets
         const valorDiaria = parseFloat(contrato.valor_diaria);
-        const valorTotalHospedagem = valorDiaria * quantidadeDias;
         const quantidadePets = parseInt(contrato.quantidade_pets) || 0;
+        
+        // Nova fórmula: valor_diaria × quantidade_dias × quantidade_pets
+        const valorTotalHospedagem = valorDiaria * quantidadeDias * quantidadePets;
 
         // Buscar serviços adicionais
         const servicosQuery = `
@@ -902,8 +904,10 @@ async function calcularValorContrato(req, res) {
             calculoHospedagem: {
                 valorDiaria: valorDiaria,
                 quantidadeDias: quantidadeDias,
+                quantidadePets: quantidadePets,
                 subtotal: valorTotalHospedagem,
-                descricao: `${quantidadeDias} diária(s) × R$ ${valorDiaria.toFixed(2)}`
+                descricao: `${quantidadePets} pet(s) × ${quantidadeDias} diária(s) × R$ ${valorDiaria.toFixed(2)}`,
+                formula: 'valor_diaria × quantidade_dias × quantidade_pets'
             },
             servicos: {
                 itens: servicos,
@@ -920,7 +924,8 @@ async function calcularValorContrato(req, res) {
                 subtotalHospedagem: `R$ ${valorTotalHospedagem.toFixed(2).replace('.', ',')}`,
                 subtotalServicos: `R$ ${totalServicos.toFixed(2).replace('.', ',')}`,
                 valorTotal: `R$ ${valorTotalContrato.toFixed(2).replace('.', ',')}`,
-                periodo: `${quantidadeDias} dia(s)`
+                periodo: `${quantidadeDias} dia(s)`,
+                pets: `${quantidadePets} pet(s)`
             }
         };
 
@@ -934,6 +939,105 @@ async function calcularValorContrato(req, res) {
         });
     } finally {
         if (client) await client.release();
+    }
+}
+
+// E também atualizar a função buscarContratoComRelacionamentos para usar a nova fórmula:
+async function buscarContratoComRelacionamentos(client, idContrato) {
+    try {
+        const contratoQuery = `
+            SELECT c.*, h.nome as hospedagem_nome, h.valor_diaria,
+                   e.idendereco, e.numero as endereco_numero,
+                   e.complemento as endereco_complemento, l.nome as logradouro_nome,
+                   b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
+                   es.sigla as estado_sigla, cep.codigo as cep_codigo,
+                   u.nome as usuario_nome, u.email as usuario_email
+            FROM contrato c
+            LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+            LEFT JOIN endereco e ON h.idendereco = e.idendereco
+            LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
+            LEFT JOIN bairro b ON l.idbairro = b.idbairro
+            LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
+            LEFT JOIN estado es ON ci.idestado = es.idestado
+            LEFT JOIN cep ON e.idcep = cep.idcep
+            LEFT JOIN usuario u ON c.idusuario = u.idusuario
+            WHERE c.idcontrato = $1
+        `;
+        
+        const contratoResult = await client.query(contratoQuery, [idContrato]);
+        const contrato = contratoResult.rows[0];
+        if (!contrato) return null;
+
+        // Formatar endereço
+        contrato.hospedagem_endereco = formatarEndereco(contrato);
+
+        // Buscar pets do contrato
+        const petsResult = await client.query(
+            `SELECT cp.idcontrato_pet, p.idpet, p.nome, p.sexo, p.nascimento, 
+                    p.idraca, p.idporte, p.idespecie
+             FROM contrato_pet cp 
+             JOIN pet p ON cp.idpet = p.idpet 
+             WHERE cp.idcontrato = $1`,
+            [idContrato]
+        );
+        contrato.pets = petsResult.rows;
+
+        // Buscar serviços do contrato
+        const servicosResult = await client.query(
+            `SELECT cs.idcontratoservico, cs.idservico, cs.quantidade, cs.preco_unitario,
+                    s.descricao, s.preco as preco_atual,
+                    (cs.quantidade * cs.preco_unitario) as subtotal
+             FROM contratoservico cs
+             JOIN servico s ON cs.idservico = s.idservico
+             WHERE cs.idcontrato = $1 
+             ORDER BY s.descricao`,
+            [idContrato]
+        );
+        contrato.servicos = servicosResult.rows;
+
+        // Calcular totais e informações adicionais
+        contrato.total_servicos = contrato.servicos.reduce((total, servico) => 
+            total + parseFloat(servico.subtotal || 0), 0
+        );
+        contrato.status_descricao = statusMap[contrato.status] || 'Desconhecido';
+
+        // Calcular duração em dias
+        if (contrato.datainicio && contrato.datafim) {
+            const diffTime = Math.abs(new Date(contrato.datafim) - new Date(contrato.datainicio));
+            contrato.duracao_dias = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        } else {
+            contrato.duracao_dias = null;
+        }
+
+        // Calcular valores baseados na NOVA FÓRMULA: diária × dias × pets
+        let quantidadeDias = contrato.duracao_dias || 1;
+        let quantidadePets = contrato.pets.length || 0;
+        let valorDiaria = contrato.valor_diaria ? parseFloat(contrato.valor_diaria) : 0;
+
+        // NOVA FÓRMULA: valor_diaria × quantidade_dias × quantidade_pets
+        let valorTotalHospedagem = valorDiaria * quantidadeDias * quantidadePets;
+
+        // Adicionar campos de cálculo ao contrato
+        contrato.calculo_valores = {
+            valor_diaria: valorDiaria,
+            quantidade_dias: quantidadeDias,
+            quantidade_pets: quantidadePets,
+            valor_total_hospedagem: valorTotalHospedagem,
+            valor_total_servicos: contrato.total_servicos || 0,
+            valor_total_contrato: valorTotalHospedagem + (contrato.total_servicos || 0),
+            valor_diaria_formatado: `R$ ${valorDiaria.toFixed(2).replace('.', ',')}`,
+            valor_total_hospedagem_formatado: `R$ ${valorTotalHospedagem.toFixed(2).replace('.', ',')}`,
+            valor_total_servicos_formatado: `R$ ${(contrato.total_servicos || 0).toFixed(2).replace('.', ',')}`,
+            valor_total_contrato_formatado: `R$ ${(valorTotalHospedagem + (contrato.total_servicos || 0)).toFixed(2).replace('.', ',')}`,
+            periodo_dias: `${quantidadeDias} dia(s)`,
+            quantidade_pets_descricao: `${quantidadePets} pet(s)`,
+            formula_descricao: `Diária × Dias × Pets = R$ ${valorDiaria.toFixed(2)} × ${quantidadeDias} × ${quantidadePets}`
+        };
+
+        return contrato;
+    } catch (error) {
+        console.error('Erro ao buscar contrato com relacionamentos:', error);
+        throw error;
     }
 }
 
