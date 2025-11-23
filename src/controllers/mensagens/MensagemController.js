@@ -19,11 +19,9 @@ async function listarMensagens(req, res) {
                 m.idmensagem,
                 m.idusuario_remetente,
                 m.idusuario_destinatario,
-                m.assunto,
                 m.mensagem,
                 m.data_envio,
                 m.lida,
-                m.arquivada,
                 ur.nome as nome_remetente,
                 ud.nome as nome_destinatario
             FROM mensagens m
@@ -138,10 +136,10 @@ async function enviarMensagem(req, res) {
     let client;
     try {
         client = await pool.connect();
-        const { idusuario_remetente, idusuario_destinatario, assunto, mensagem } = req.body;
+        const { idusuario_remetente, idusuario_destinatario, mensagem } = req.body;
 
         // Validações
-        if (!idusuario_remetente || !idusuario_destinatario || !assunto || !mensagem) {
+        if (!idusuario_remetente || !idusuario_destinatario || !mensagem) {
             return res.status(400).json({
                 message: 'Todos os campos são obrigatórios'
             });
@@ -172,10 +170,10 @@ async function enviarMensagem(req, res) {
 
         const result = await client.query(
             `INSERT INTO mensagens 
-             (idusuario_remetente, idusuario_destinatario, assunto, mensagem)
-             VALUES ($1, $2, $3, $4) 
+             (idusuario_remetente, idusuario_destinatario, mensagem)
+             VALUES ($1, $2, $3) 
              RETURNING *`,
-            [idusuario_remetente, idusuario_destinatario, assunto, mensagem]
+            [idusuario_remetente, idusuario_destinatario, mensagem]
         );
 
         res.status(201).json({
