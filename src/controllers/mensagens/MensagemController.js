@@ -506,6 +506,272 @@ async function listarConversas(req, res) {
     }
 }
 
+async function enviarMensagemMobile(req, res) {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idusuario, idhospedagem, mensagem } = req.body;
+
+        // Validações específicas para mobile
+        if (!idusuario || !idhospedagem || !mensagem) {
+            return res.status(400).json({
+                message: 'idusuario, idhospedagem e mensagem são obrigatórios'
+            });
+        }
+
+        if (!isValidId(idusuario) || !isValidId(idhospedagem)) {
+            return res.status(400).json({
+                message: 'IDs inválidos'
+            });
+        }
+
+        if (mensagem.trim().length === 0) {
+            return res.status(400).json({
+                message: 'A mensagem não pode estar vazia'
+            });
+        }
+
+        // Verificar se o usuário existe
+        const usuario = await client.query(
+            'SELECT idusuario, nome FROM usuario WHERE idusuario = $1',
+            [idusuario]
+        );
+
+        if (usuario.rows.length === 0) {
+            return res.status(404).json({
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        // Verificar se a hospedagem existe (assumindo que hospedagem está na tabela usuario)
+        const hospedagem = await client.query(
+            'SELECT idusuario, nome FROM usuario WHERE idusuario = $1',
+            [idhospedagem]
+        );
+
+        if (hospedagem.rows.length === 0) {
+            return res.status(404).json({
+                message: 'Hospedagem não encontrada'
+            });
+        }
+
+        // Inserir mensagem no banco
+        const result = await client.query(
+            `INSERT INTO mensagens 
+             (idusuario_remetente, idusuario_destinatario, mensagem)
+             VALUES ($1, $2, $3) 
+             RETURNING *`,
+            [idusuario, idhospedagem, mensagem.trim()]
+        );
+
+        res.status(201).json({
+            message: 'Mensagem enviada com sucesso!',
+            data: {
+                ...result.rows[0],
+                nome_remetente: usuario.rows[0].nome,
+                nome_destinatario: hospedagem.rows[0].nome
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao enviar mensagem',
+            error: error.message
+        });
+        console.error('Erro ao enviar mensagem mobile:', error);
+    } finally {
+        if (client) client.release();
+    }
+}
+
+async function buscarConversaMobile(req, res) {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idusuario, idhospedagem } = req.params;
+        const { limit = 100, offset = 0 } = req.query;
+
+        if (!idusuario || !idhospedagem) {
+            return res.status(400).json({
+                message: 'idusuario e idhospedagem são obrigatórios'
+            });
+        }
+
+        if (!isValidId(idusuario) || !isValidId(idhospedagem)) {
+            return res.status(400).json({
+                message: 'IDs inválidos'
+            });
+        }
+
+        const query = `
+            SELECT 
+                m.idmensagem,
+                m.idusuario_remetente,
+                m.idusuario_destinatario,
+                m.mensagem,
+                m.data_envio,
+                m.lida,
+                ur.nome as nome_remetente,
+                ud.nome as nome_destinatario
+            FROM mensagens m
+            INNER JOIN usuario ur ON m.idusuario_remetente = ur.idusuario
+            INNER JOIN usuario ud ON m.idusuario_destinatario = ud.idusuario
+            WHERE (m.idusuario_remetente = $1 AND m.idusuario_destinatario = $2)
+               OR (m.idusuario_remetente = $2 AND m.idusuario_destinatario = $1)
+            ORDER BY m.data_envio ASC
+            LIMIT $3 OFFSET $4
+        `;
+
+        const result = await client.query(query, [idusuario, idhospedagem, limit, offset]);
+        
+        res.status(200).json({
+            conversa: result.rows,
+            participantes: {
+                idusuario: parseInt(idusuario),
+                idhospedagem: parseInt(idhospedagem)
+            },
+            paginacao: {
+                limit: parseInt(limit),
+                offset: parseInt(offset),
+                total: result.rows.length
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao buscar conversa',
+            error: error.message
+        });
+        console.error('Erro ao buscar conversa mobile:', error);
+    } finally {
+        if (client) client.release();
+    }
+}
+
+async function listarConversasMobile(req, res) {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idusuario } = req.params;
+        const { limit = 20, offset = 0 } = req.query;
+
+        if (!idusuario) {
+            return res.status(400).json({
+                message: 'ID do usuário é obrigatório'
+            });
+        }
+
+        if (!isValidId(idusuario)) {
+            return res.status(400).json({
+                message: 'ID do usuário inválido'
+            });
+        }
+
+        // Buscar conversas onde o usuário é remetente ou destinatário
+        const query = `
+            SELECT 
+                DISTINCT ON (
+                    CASE 
+                        WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
+                        ELSE m.idusuario_remetente 
+                    END
+                )
+                CASE 
+                    WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
+                    ELSE m.idusuario_remetente 
+                END as idcontato,
+                CASE 
+                    WHEN m.idusuario_remetente = $1 THEN ud.nome 
+                    ELSE ur.nome 
+                END as nome_contato,
+                CASE 
+                    WHEN m.idusuario_remetente = $1 THEN 'hospedagem' 
+                    ELSE 'usuario' 
+                END as tipo_contato,
+                m.mensagem as ultima_mensagem,
+                m.data_envio as ultima_data,
+                m.lida,
+                (SELECT COUNT(*) 
+                 FROM mensagens 
+                 WHERE idusuario_destinatario = $1 
+                 AND lida = false 
+                 AND idusuario_remetente = CASE 
+                    WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
+                    ELSE m.idusuario_remetente 
+                 END) as nao_lidas
+            FROM mensagens m
+            INNER JOIN usuario ur ON m.idusuario_remetente = ur.idusuario
+            INNER JOIN usuario ud ON m.idusuario_destinatario = ud.idusuario
+            WHERE m.idusuario_remetente = $1 OR m.idusuario_destinatario = $1
+            ORDER BY 
+                CASE 
+                    WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
+                    ELSE m.idusuario_remetente 
+                END,
+                m.data_envio DESC
+            LIMIT $2 OFFSET $3
+        `;
+
+        const result = await client.query(query, [idusuario, limit, offset]);
+        
+        res.status(200).json({
+            conversas: result.rows,
+            paginacao: {
+                limit: parseInt(limit),
+                offset: parseInt(offset),
+                total: result.rows.length
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao listar conversas',
+            error: error.message
+        });
+        console.error('Erro ao listar conversas mobile:', error);
+    } finally {
+        if (client) client.release();
+    }
+}
+
+async function contarNaoLidasMobile(req, res) {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idusuario } = req.params;
+
+        if (!idusuario) {
+            return res.status(400).json({
+                message: 'ID do usuário é obrigatório'
+            });
+        }
+
+        if (!isValidId(idusuario)) {
+            return res.status(400).json({
+                message: 'ID do usuário inválido'
+            });
+        }
+
+        const result = await client.query(
+            'SELECT COUNT(*) as total_nao_lidas FROM mensagens WHERE idusuario_destinatario = $1 AND lida = false',
+            [idusuario]
+        );
+
+        res.status(200).json({
+            total_nao_lidas: parseInt(result.rows[0].total_nao_lidas)
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao contar mensagens não lidas',
+            error: error.message
+        });
+        console.error('Erro ao contar mensagens não lidas mobile:', error);
+    } finally {
+        if (client) client.release();
+    }
+}
+
 module.exports = {
     listarMensagens,
     buscarConversa,
@@ -515,5 +781,9 @@ module.exports = {
     marcarVariasComoLidas,
     contarNaoLidas,
     deletarMensagem,
-    listarConversas
+    listarConversas,
+    enviarMensagemMobile,
+    buscarConversaMobile,
+    listarConversasMobile,
+    contarNaoLidasMobile
 };
