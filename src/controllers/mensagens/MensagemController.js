@@ -1,5 +1,9 @@
-// controllers/mensagensController.js
 const pool = require('../../connections/SQLConnections.js');
+
+// Função auxiliar para validar IDs
+function isValidId(id) {
+    return !isNaN(id) && parseInt(id) > 0;
+}
 
 async function listarMensagens(req, res) {
     let client;
@@ -11,6 +15,12 @@ async function listarMensagens(req, res) {
         if (!idusuario) {
             return res.status(400).json({
                 message: 'ID do usuário é obrigatório'
+            });
+        }
+
+        if (!isValidId(idusuario)) {
+            return res.status(400).json({
+                message: 'ID do usuário inválido'
             });
         }
 
@@ -33,7 +43,15 @@ async function listarMensagens(req, res) {
         `;
 
         const result = await client.query(query, [idusuario, limit, offset]);
-        res.status(200).send(result.rows);
+        
+        res.status(200).json({
+            mensagens: result.rows,
+            paginacao: {
+                limit: parseInt(limit),
+                offset: parseInt(offset),
+                total: result.rows.length
+            }
+        });
 
     } catch (error) {
         res.status(500).json({
@@ -59,16 +77,20 @@ async function buscarConversa(req, res) {
             });
         }
 
+        if (!isValidId(idusuario1) || !isValidId(idusuario2)) {
+            return res.status(400).json({
+                message: 'IDs dos usuários inválidos'
+            });
+        }
+
         const query = `
             SELECT 
                 m.idmensagem,
                 m.idusuario_remetente,
                 m.idusuario_destinatario,
-                m.assunto,
                 m.mensagem,
                 m.data_envio,
                 m.lida,
-                m.arquivada,
                 ur.nome as nome_remetente,
                 ud.nome as nome_destinatario
             FROM mensagens m
@@ -81,7 +103,19 @@ async function buscarConversa(req, res) {
         `;
 
         const result = await client.query(query, [idusuario1, idusuario2, limit, offset]);
-        res.status(200).send(result.rows);
+        
+        res.status(200).json({
+            conversa: result.rows,
+            participantes: {
+                usuario1: idusuario1,
+                usuario2: idusuario2
+            },
+            paginacao: {
+                limit: parseInt(limit),
+                offset: parseInt(offset),
+                total: result.rows.length
+            }
+        });
 
     } catch (error) {
         res.status(500).json({
@@ -99,6 +133,12 @@ async function buscarMensagem(req, res) {
     try {
         client = await pool.connect();
         const { idmensagem } = req.params;
+
+        if (!isValidId(idmensagem)) {
+            return res.status(400).json({
+                message: 'ID da mensagem inválido'
+            });
+        }
 
         const query = `
             SELECT 
@@ -119,7 +159,9 @@ async function buscarMensagem(req, res) {
             });
         }
 
-        res.status(200).send(result.rows[0]);
+        res.status(200).json({
+            mensagem: result.rows[0]
+        });
 
     } catch (error) {
         res.status(500).json({
@@ -145,26 +187,44 @@ async function enviarMensagem(req, res) {
             });
         }
 
+        if (!isValidId(idusuario_remetente) || !isValidId(idusuario_destinatario)) {
+            return res.status(400).json({
+                message: 'IDs dos usuários inválidos'
+            });
+        }
+
         if (idusuario_remetente === idusuario_destinatario) {
             return res.status(400).json({
                 message: 'Não é possível enviar mensagem para si mesmo'
             });
         }
 
+        if (mensagem.trim().length === 0) {
+            return res.status(400).json({
+                message: 'A mensagem não pode estar vazia'
+            });
+        }
+
         // Verificar se usuários existem
         const usuarioRemetente = await client.query(
-            'SELECT idusuario FROM usuario WHERE idusuario = $1',
+            'SELECT idusuario, nome FROM usuario WHERE idusuario = $1',
             [idusuario_remetente]
         );
 
         const usuarioDestinatario = await client.query(
-            'SELECT idusuario FROM usuario WHERE idusuario = $1',
+            'SELECT idusuario, nome FROM usuario WHERE idusuario = $1',
             [idusuario_destinatario]
         );
 
-        if (usuarioRemetente.rows.length === 0 || usuarioDestinatario.rows.length === 0) {
+        if (usuarioRemetente.rows.length === 0) {
             return res.status(404).json({
-                message: 'Usuário remetente ou destinatário não encontrado'
+                message: 'Usuário remetente não encontrado'
+            });
+        }
+
+        if (usuarioDestinatario.rows.length === 0) {
+            return res.status(404).json({
+                message: 'Usuário destinatário não encontrado'
             });
         }
 
@@ -173,12 +233,16 @@ async function enviarMensagem(req, res) {
              (idusuario_remetente, idusuario_destinatario, mensagem)
              VALUES ($1, $2, $3) 
              RETURNING *`,
-            [idusuario_remetente, idusuario_destinatario, mensagem]
+            [idusuario_remetente, idusuario_destinatario, mensagem.trim()]
         );
 
         res.status(201).json({
             message: 'Mensagem enviada com sucesso!',
-            data: result.rows[0]
+            data: {
+                ...result.rows[0],
+                nome_remetente: usuarioRemetente.rows[0].nome,
+                nome_destinatario: usuarioDestinatario.rows[0].nome
+            }
         });
 
     } catch (error) {
@@ -197,6 +261,12 @@ async function marcarComoLida(req, res) {
     try {
         client = await pool.connect();
         const { idmensagem } = req.params;
+
+        if (!isValidId(idmensagem)) {
+            return res.status(400).json({
+                message: 'ID da mensagem inválido'
+            });
+        }
 
         const result = await client.query(
             'UPDATE mensagens SET lida = true WHERE idmensagem = $1 RETURNING *',
@@ -237,6 +307,15 @@ async function marcarVariasComoLidas(req, res) {
             });
         }
 
+        // Validar todos os IDs
+        for (const id of idsMensagens) {
+            if (!isValidId(id)) {
+                return res.status(400).json({
+                    message: `ID de mensagem inválido: ${id}`
+                });
+            }
+        }
+
         const placeholders = idsMensagens.map((_, index) => `$${index + 1}`).join(',');
         const query = `
             UPDATE mensagens 
@@ -263,39 +342,6 @@ async function marcarVariasComoLidas(req, res) {
     }
 }
 
-async function arquivarMensagem(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idmensagem } = req.params;
-
-        const result = await client.query(
-            'UPDATE mensagens SET arquivada = true WHERE idmensagem = $1 RETURNING *',
-            [idmensagem]
-        );
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({
-                message: 'Mensagem não encontrada'
-            });
-        }
-
-        res.status(200).json({
-            message: 'Mensagem arquivada com sucesso!',
-            data: result.rows[0]
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            message: 'Erro ao arquivar mensagem',
-            error: error.message
-        });
-        console.error('Erro ao arquivar mensagem:', error);
-    } finally {
-        if (client) client.release();
-    }
-}
-
 async function contarNaoLidas(req, res) {
     let client;
     try {
@@ -305,6 +351,12 @@ async function contarNaoLidas(req, res) {
         if (!idusuario) {
             return res.status(400).json({
                 message: 'ID do usuário é obrigatório'
+            });
+        }
+
+        if (!isValidId(idusuario)) {
+            return res.status(400).json({
+                message: 'ID do usuário inválido'
             });
         }
 
@@ -334,6 +386,12 @@ async function deletarMensagem(req, res) {
         client = await pool.connect();
         const { idmensagem } = req.params;
 
+        if (!isValidId(idmensagem)) {
+            return res.status(400).json({
+                message: 'ID da mensagem inválido'
+            });
+        }
+
         const result = await client.query(
             'DELETE FROM mensagens WHERE idmensagem = $1 RETURNING *',
             [idmensagem]
@@ -361,6 +419,93 @@ async function deletarMensagem(req, res) {
     }
 }
 
+// Função adicional: Listar conversas resumidas
+async function listarConversas(req, res) {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idusuario } = req.params;
+        const { limit = 20, offset = 0 } = req.query;
+
+        if (!idusuario) {
+            return res.status(400).json({
+                message: 'ID do usuário é obrigatório'
+            });
+        }
+
+        if (!isValidId(idusuario)) {
+            return res.status(400).json({
+                message: 'ID do usuário inválido'
+            });
+        }
+
+        const query = `
+            SELECT 
+                DISTINCT ON (
+                    CASE 
+                        WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
+                        ELSE m.idusuario_remetente 
+                    END
+                )
+                CASE 
+                    WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
+                    ELSE m.idusuario_remetente 
+                END as idusuario_contato,
+                CASE 
+                    WHEN m.idusuario_remetente = $1 THEN ud.nome 
+                    ELSE ur.nome 
+                END as nome_contato,
+                m.mensagem as ultima_mensagem,
+                m.data_envio as ultima_data,
+                m.lida,
+                (SELECT COUNT(*) 
+                 FROM mensagens 
+                 WHERE ((idusuario_remetente = $1 AND idusuario_destinatario = 
+                        CASE 
+                            WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
+                            ELSE m.idusuario_remetente 
+                        END)
+                     OR (idusuario_destinatario = $1 AND idusuario_remetente = 
+                        CASE 
+                            WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
+                            ELSE m.idusuario_remetente 
+                        END))
+                 AND lida = false AND idusuario_destinatario = $1) as nao_lidas
+            FROM mensagens m
+            INNER JOIN usuario ur ON m.idusuario_remetente = ur.idusuario
+            INNER JOIN usuario ud ON m.idusuario_destinatario = ud.idusuario
+            WHERE m.idusuario_remetente = $1 OR m.idusuario_destinatario = $1
+            ORDER BY 
+                CASE 
+                    WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
+                    ELSE m.idusuario_remetente 
+                END,
+                m.data_envio DESC
+            LIMIT $2 OFFSET $3
+        `;
+
+        const result = await client.query(query, [idusuario, limit, offset]);
+        
+        res.status(200).json({
+            conversas: result.rows,
+            paginacao: {
+                limit: parseInt(limit),
+                offset: parseInt(offset),
+                total: result.rows.length
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao listar conversas',
+            error: error.message
+        });
+        console.error('Erro ao listar conversas:', error);
+    } finally {
+        if (client) client.release();
+    }
+}
+
 module.exports = {
     listarMensagens,
     buscarConversa,
@@ -368,7 +513,7 @@ module.exports = {
     enviarMensagem,
     marcarComoLida,
     marcarVariasComoLidas,
-    arquivarMensagem,
     contarNaoLidas,
-    deletarMensagem
+    deletarMensagem,
+    listarConversas
 };
