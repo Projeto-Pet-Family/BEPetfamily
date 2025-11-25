@@ -17,17 +17,17 @@ async function listarMensagens(req, res) {
         const query = `
             SELECT 
                 m.idmensagem,
-                m.idusuario,
-                m.idhospedagem,
+                m.idusuario_remetente,
+                m.idusuario_destinatario,
                 m.mensagem,
                 m.data_envio,
                 m.lida,
-                u.nome as nome_usuario,
-                h.titulo as titulo_hospedagem
+                ur.nome as nome_remetente,
+                ud.nome as nome_destinatario
             FROM mensagens m
-            LEFT JOIN usuario u ON m.idusuario = u.idusuario
-            LEFT JOIN hospedagem h ON m.idhospedagem = h.idhospedagem
-            WHERE m.idusuario = $1
+            INNER JOIN usuario ur ON m.idusuario_remetente = ur.idusuario
+            INNER JOIN usuario ud ON m.idusuario_destinatario = ud.idusuario
+            WHERE m.idusuario_remetente = $1 OR m.idusuario_destinatario = $1
             ORDER BY m.data_envio DESC
             LIMIT $2 OFFSET $3
         `;
@@ -50,36 +50,37 @@ async function buscarConversa(req, res) {
     let client;
     try {
         client = await pool.connect();
-        const { idusuario, idhospedagem } = req.params;
+        const { idusuario1, idusuario2 } = req.params;
         const { limit = 100, offset = 0 } = req.query;
 
-        if (!idusuario || !idhospedagem) {
+        if (!idusuario1 || !idusuario2) {
             return res.status(400).json({
-                message: 'ID do usuário e ID da hospedagem são obrigatórios'
+                message: 'IDs dos usuários são obrigatórios'
             });
         }
 
         const query = `
             SELECT 
                 m.idmensagem,
-                m.idusuario,
-                m.idhospedagem,
+                m.idusuario_remetente,
+                m.idusuario_destinatario,
                 m.assunto,
                 m.mensagem,
                 m.data_envio,
                 m.lida,
                 m.arquivada,
-                u.nome as nome_usuario,
-                h.titulo as titulo_hospedagem
+                ur.nome as nome_remetente,
+                ud.nome as nome_destinatario
             FROM mensagens m
-            LEFT JOIN usuario u ON m.idusuario = u.idusuario
-            LEFT JOIN hospedagem h ON m.idhospedagem = h.idhospedagem
-            WHERE m.idusuario = $1 AND m.idhospedagem = $2
+            INNER JOIN usuario ur ON m.idusuario_remetente = ur.idusuario
+            INNER JOIN usuario ud ON m.idusuario_destinatario = ud.idusuario
+            WHERE (m.idusuario_remetente = $1 AND m.idusuario_destinatario = $2)
+               OR (m.idusuario_remetente = $2 AND m.idusuario_destinatario = $1)
             ORDER BY m.data_envio ASC
             LIMIT $3 OFFSET $4
         `;
 
-        const result = await client.query(query, [idusuario, idhospedagem, limit, offset]);
+        const result = await client.query(query, [idusuario1, idusuario2, limit, offset]);
         res.status(200).send(result.rows);
 
     } catch (error) {
@@ -102,11 +103,11 @@ async function buscarMensagem(req, res) {
         const query = `
             SELECT 
                 m.*,
-                u.nome as nome_usuario,
-                h.titulo as titulo_hospedagem
+                ur.nome as nome_remetente,
+                ud.nome as nome_destinatario
             FROM mensagens m
-            LEFT JOIN usuario u ON m.idusuario = u.idusuario
-            LEFT JOIN hospedagem h ON m.idhospedagem = h.idhospedagem
+            INNER JOIN usuario ur ON m.idusuario_remetente = ur.idusuario
+            INNER JOIN usuario ud ON m.idusuario_destinatario = ud.idusuario
             WHERE m.idmensagem = $1
         `;
 
@@ -135,44 +136,44 @@ async function enviarMensagem(req, res) {
     let client;
     try {
         client = await pool.connect();
-        const { idusuario, idhospedagem, mensagem } = req.body;
+        const { idusuario_remetente, idusuario_destinatario, mensagem } = req.body;
 
         // Validações
-        if (!idusuario || !idhospedagem || !mensagem) {
+        if (!idusuario_remetente || !idusuario_destinatario || !mensagem) {
             return res.status(400).json({
-                message: 'Todos os campos são obrigatórios (idusuario, idhospedagem, mensagem)'
+                message: 'Todos os campos são obrigatórios'
             });
         }
 
-        // Verificar se usuário e hospedagem existem
-        const usuarioExiste = await client.query(
+        if (idusuario_remetente === idusuario_destinatario) {
+            return res.status(400).json({
+                message: 'Não é possível enviar mensagem para si mesmo'
+            });
+        }
+
+        // Verificar se usuários existem
+        const usuarioRemetente = await client.query(
             'SELECT idusuario FROM usuario WHERE idusuario = $1',
-            [idusuario]
+            [idusuario_remetente]
         );
 
-        const hospedagemExiste = await client.query(
-            'SELECT idhospedagem FROM hospedagem WHERE idhospedagem = $1',
-            [idhospedagem]
+        const usuarioDestinatario = await client.query(
+            'SELECT idusuario FROM usuario WHERE idusuario = $1',
+            [idusuario_destinatario]
         );
 
-        if (usuarioExiste.rows.length === 0) {
+        if (usuarioRemetente.rows.length === 0 || usuarioDestinatario.rows.length === 0) {
             return res.status(404).json({
-                message: 'Usuário não encontrado'
-            });
-        }
-
-        if (hospedagemExiste.rows.length === 0) {
-            return res.status(404).json({
-                message: 'Hospedagem não encontrada'
+                message: 'Usuário remetente ou destinatário não encontrado'
             });
         }
 
         const result = await client.query(
             `INSERT INTO mensagens 
-             (idusuario, idhospedagem, mensagem)
+             (idusuario_remetente, idusuario_destinatario, mensagem)
              VALUES ($1, $2, $3) 
              RETURNING *`,
-            [idusuario, idhospedagem, mensagem]
+            [idusuario_remetente, idusuario_destinatario, mensagem]
         );
 
         res.status(201).json({
@@ -308,7 +309,7 @@ async function contarNaoLidas(req, res) {
         }
 
         const result = await client.query(
-            'SELECT COUNT(*) as total_nao_lidas FROM mensagens WHERE idusuario = $1 AND lida = false',
+            'SELECT COUNT(*) as total_nao_lidas FROM mensagens WHERE idusuario_destinatario = $1 AND lida = false',
             [idusuario]
         );
 
@@ -360,52 +361,6 @@ async function deletarMensagem(req, res) {
     }
 }
 
-// Nova função para listar mensagens por hospedagem
-async function listarMensagensPorHospedagem(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idhospedagem } = req.params;
-        const { limit = 50, offset = 0 } = req.query;
-
-        if (!idhospedagem) {
-            return res.status(400).json({
-                message: 'ID da hospedagem é obrigatório'
-            });
-        }
-
-        const query = `
-            SELECT 
-                m.idmensagem,
-                m.idusuario,
-                m.idhospedagem,
-                m.mensagem,
-                m.data_envio,
-                m.lida,
-                u.nome as nome_usuario,
-                h.titulo as titulo_hospedagem
-            FROM mensagens m
-            LEFT JOIN usuario u ON m.idusuario = u.idusuario
-            LEFT JOIN hospedagem h ON m.idhospedagem = h.idhospedagem
-            WHERE m.idhospedagem = $1
-            ORDER BY m.data_envio DESC
-            LIMIT $2 OFFSET $3
-        `;
-
-        const result = await client.query(query, [idhospedagem, limit, offset]);
-        res.status(200).send(result.rows);
-
-    } catch (error) {
-        res.status(500).json({
-            message: 'Erro ao listar mensagens da hospedagem',
-            error: error.message
-        });
-        console.error('Erro ao listar mensagens da hospedagem:', error);
-    } finally {
-        if (client) client.release();
-    }
-}
-
 module.exports = {
     listarMensagens,
     buscarConversa,
@@ -415,6 +370,5 @@ module.exports = {
     marcarVariasComoLidas,
     arquivarMensagem,
     contarNaoLidas,
-    deletarMensagem,
-    listarMensagensPorHospedagem
+    deletarMensagem
 };
