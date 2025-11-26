@@ -5,110 +5,136 @@ function isValidId(id) {
     return !isNaN(id) && parseInt(id) > 0;
 }
 
-async function listarMensagens(req, res) {
+// ==================== MÉTODOS MOBILE ====================
+// (Usuário → Hospedagem)
+
+async function enviarMensagemMobile(req, res) {
     let client;
     try {
         client = await pool.connect();
-        const { idusuario } = req.params;
-        const { limit = 50, offset = 0 } = req.query;
+        const { idusuario, idhospedagem, mensagem } = req.body;
 
-        if (!idusuario) {
+        // Validações básicas
+        if (!idusuario || !idhospedagem || !mensagem) {
             return res.status(400).json({
-                message: 'ID do usuário é obrigatório'
+                message: 'idusuario, idhospedagem e mensagem são obrigatórios'
             });
         }
 
-        if (!isValidId(idusuario)) {
+        if (!isValidId(idusuario) || !isValidId(idhospedagem)) {
             return res.status(400).json({
-                message: 'ID do usuário inválido'
+                message: 'IDs inválidos'
             });
         }
 
-        const query = `
-            SELECT 
-                m.idmensagem,
-                m.idusuario_remetente,
-                m.idusuario_destinatario,
-                m.mensagem,
-                m.data_envio,
-                m.lida,
-                ur.nome as nome_remetente,
-                ud.nome as nome_destinatario
-            FROM mensagens m
-            INNER JOIN usuario ur ON m.idusuario_remetente = ur.idusuario
-            INNER JOIN usuario ud ON m.idusuario_destinatario = ud.idusuario
-            WHERE m.idusuario_remetente = $1 OR m.idusuario_destinatario = $1
-            ORDER BY m.data_envio DESC
-            LIMIT $2 OFFSET $3
-        `;
+        if (mensagem.trim().length === 0) {
+            return res.status(400).json({
+                message: 'A mensagem não pode estar vazia'
+            });
+        }
 
-        const result = await client.query(query, [idusuario, limit, offset]);
-        
-        res.status(200).json({
-            mensagens: result.rows,
-            paginacao: {
-                limit: parseInt(limit),
-                offset: parseInt(offset),
-                total: result.rows.length
+        // Usuário (remetente) envia para Hospedagem (destinatário)
+        const result = await client.query(
+            `INSERT INTO mensagens 
+             (id_remetente, id_destinatario, mensagem)
+             VALUES ($1, $2, $3) 
+             RETURNING *`,
+            [idusuario, idhospedagem, mensagem.trim()]
+        );
+
+        // Buscar nome do usuário remetente
+        const usuario = await client.query(
+            'SELECT nome FROM usuario WHERE idusuario = $1',
+            [idusuario]
+        );
+
+        const nomeUsuario = usuario.rows[0]?.nome || 'Usuário';
+
+        // Buscar nome da hospedagem destinatária
+        const hospedagem = await client.query(
+            'SELECT nome FROM hospedagem WHERE idhospedagem = $1',
+            [idhospedagem]
+        );
+
+        const nomeHospedagem = hospedagem.rows[0]?.nome || 'Hospedagem';
+
+        res.status(201).json({
+            message: 'Mensagem enviada com sucesso!',
+            data: {
+                ...result.rows[0],
+                nome_remetente: nomeUsuario,
+                nome_destinatario: nomeHospedagem,
+                nome_hospedagem: nomeHospedagem
             }
         });
 
     } catch (error) {
         res.status(500).json({
-            message: 'Erro ao listar mensagens',
+            message: 'Erro ao enviar mensagem',
             error: error.message
         });
-        console.error('Erro ao listar mensagens:', error);
+        console.error('Erro ao enviar mensagem mobile:', error);
     } finally {
         if (client) client.release();
     }
 }
 
-async function buscarConversa(req, res) {
+async function buscarConversaMobile(req, res) {
     let client;
     try {
         client = await pool.connect();
-        const { idusuario1, idusuario2 } = req.params;
+        const { idusuario, idhospedagem } = req.params;
         const { limit = 100, offset = 0 } = req.query;
 
-        if (!idusuario1 || !idusuario2) {
+        if (!idusuario || !idhospedagem) {
             return res.status(400).json({
-                message: 'IDs dos usuários são obrigatórios'
+                message: 'idusuario e idhospedagem são obrigatórios'
             });
         }
 
-        if (!isValidId(idusuario1) || !isValidId(idusuario2)) {
+        if (!isValidId(idusuario) || !isValidId(idhospedagem)) {
             return res.status(400).json({
-                message: 'IDs dos usuários inválidos'
+                message: 'IDs inválidos'
             });
         }
 
+        // Buscar conversa completa entre usuário e hospedagem
         const query = `
             SELECT 
                 m.idmensagem,
-                m.idusuario_remetente,
-                m.idusuario_destinatario,
+                m.id_remetente,
+                m.id_destinatario,
                 m.mensagem,
                 m.data_envio,
                 m.lida,
-                ur.nome as nome_remetente,
-                ud.nome as nome_destinatario
+                CASE 
+                    WHEN m.id_remetente = $1 THEN u.nome
+                    ELSE h.nome 
+                END as nome_remetente,
+                CASE 
+                    WHEN m.id_destinatario = $2 THEN h2.nome
+                    ELSE u2.nome 
+                END as nome_destinatario,
+                h.nome as nome_hospedagem
             FROM mensagens m
-            INNER JOIN usuario ur ON m.idusuario_remetente = ur.idusuario
-            INNER JOIN usuario ud ON m.idusuario_destinatario = ud.idusuario
-            WHERE (m.idusuario_remetente = $1 AND m.idusuario_destinatario = $2)
-               OR (m.idusuario_remetente = $2 AND m.idusuario_destinatario = $1)
+            LEFT JOIN usuario u ON m.id_remetente = u.idusuario
+            LEFT JOIN usuario u2 ON m.id_destinatario = u2.idusuario
+            LEFT JOIN hospedagem h ON m.id_remetente = h.idhospedagem
+            LEFT JOIN hospedagem h2 ON m.id_destinatario = h2.idhospedagem
+            WHERE (m.id_remetente = $1 AND m.id_destinatario = $2)    -- Usuário → Hospedagem
+               OR (m.id_remetente = $2 AND m.id_destinatario = $1)    -- Hospedagem → Usuário
             ORDER BY m.data_envio ASC
             LIMIT $3 OFFSET $4
         `;
 
-        const result = await client.query(query, [idusuario1, idusuario2, limit, offset]);
+        const result = await client.query(query, [idusuario, idhospedagem, limit, offset]);
         
         res.status(200).json({
             conversa: result.rows,
             participantes: {
-                usuario1: idusuario1,
-                usuario2: idusuario2
+                idusuario: parseInt(idusuario),
+                idhospedagem: parseInt(idhospedagem),
+                nome_hospedagem: result.rows[0]?.nome_hospedagem || 'Hospedagem'
             },
             paginacao: {
                 limit: parseInt(limit),
@@ -122,80 +148,93 @@ async function buscarConversa(req, res) {
             message: 'Erro ao buscar conversa',
             error: error.message
         });
-        console.error('Erro ao buscar conversa:', error);
+        console.error('Erro ao buscar conversa mobile:', error);
     } finally {
         if (client) client.release();
     }
 }
 
-async function buscarMensagem(req, res) {
+async function listarConversasMobile(req, res) {
     let client;
     try {
         client = await pool.connect();
-        const { idmensagem } = req.params;
+        const { idusuario } = req.params;
+        const { limit = 20, offset = 0 } = req.query;
 
-        if (!isValidId(idmensagem)) {
+        if (!idusuario) {
             return res.status(400).json({
-                message: 'ID da mensagem inválido'
+                message: 'ID do usuário é obrigatório'
             });
         }
 
+        if (!isValidId(idusuario)) {
+            return res.status(400).json({
+                message: 'ID do usuário inválido'
+            });
+        }
+
+        // Buscar conversas do usuário com hospedagens
         const query = `
-            SELECT 
-                m.*,
-                ur.nome as nome_remetente,
-                ud.nome as nome_destinatario
+            SELECT DISTINCT ON (m.id_destinatario)
+                m.id_destinatario as idcontato,
+                h.nome as nome_contato,
+                'hospedagem' as tipo_contato,
+                m.mensagem as ultima_mensagem,
+                m.data_envio as ultima_data,
+                m.lida,
+                (SELECT COUNT(*) 
+                 FROM mensagens 
+                 WHERE id_destinatario = $1 
+                 AND id_remetente = m.id_destinatario
+                 AND lida = false) as nao_lidas
             FROM mensagens m
-            INNER JOIN usuario ur ON m.idusuario_remetente = ur.idusuario
-            INNER JOIN usuario ud ON m.idusuario_destinatario = ud.idusuario
-            WHERE m.idmensagem = $1
+            LEFT JOIN hospedagem h ON m.id_destinatario = h.idhospedagem
+            WHERE m.id_remetente = $1 AND h.idhospedagem IS NOT NULL
+            ORDER BY m.id_destinatario, m.data_envio DESC
+            LIMIT $2 OFFSET $3
         `;
 
-        const result = await client.query(query, [idmensagem]);
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({
-                message: 'Mensagem não encontrada'
-            });
-        }
-
+        const result = await client.query(query, [idusuario, limit, offset]);
+        
         res.status(200).json({
-            mensagem: result.rows[0]
+            conversas: result.rows,
+            paginacao: {
+                limit: parseInt(limit),
+                offset: parseInt(offset),
+                total: result.rows.length
+            }
         });
 
     } catch (error) {
         res.status(500).json({
-            message: 'Erro ao buscar mensagem',
+            message: 'Erro ao listar conversas',
             error: error.message
         });
-        console.error('Erro ao buscar mensagem:', error);
+        console.error('Erro ao listar conversas mobile:', error);
     } finally {
         if (client) client.release();
     }
 }
 
-async function enviarMensagem(req, res) {
+// ==================== MÉTODOS WEB ====================
+// (Hospedagem → Usuário)
+
+async function enviarMensagemWeb(req, res) {
     let client;
     try {
         client = await pool.connect();
-        const { idusuario_remetente, idusuario_destinatario, mensagem } = req.body;
+        const { idhospedagem, idusuario, mensagem } = req.body;
 
-        // Validações
-        if (!idusuario_remetente || !idusuario_destinatario || !mensagem) {
+        // Validações básicas
+        if (!idhospedagem || !idusuario || !mensagem) {
             return res.status(400).json({
-                message: 'Todos os campos são obrigatórios'
+                message: 'idhospedagem, idusuario e mensagem são obrigatórios'
             });
         }
 
-        if (!isValidId(idusuario_remetente) || !isValidId(idusuario_destinatario)) {
+        if (!isValidId(idhospedagem) || !isValidId(idusuario)) {
             return res.status(400).json({
-                message: 'IDs dos usuários inválidos'
-            });
-        }
-
-        if (idusuario_remetente === idusuario_destinatario) {
-            return res.status(400).json({
-                message: 'Não é possível enviar mensagem para si mesmo'
+                message: 'IDs inválidos'
             });
         }
 
@@ -205,43 +244,38 @@ async function enviarMensagem(req, res) {
             });
         }
 
-        // Verificar se usuários existem
-        const usuarioRemetente = await client.query(
-            'SELECT idusuario, nome FROM usuario WHERE idusuario = $1',
-            [idusuario_remetente]
-        );
-
-        const usuarioDestinatario = await client.query(
-            'SELECT idusuario, nome FROM usuario WHERE idusuario = $1',
-            [idusuario_destinatario]
-        );
-
-        if (usuarioRemetente.rows.length === 0) {
-            return res.status(404).json({
-                message: 'Usuário remetente não encontrado'
-            });
-        }
-
-        if (usuarioDestinatario.rows.length === 0) {
-            return res.status(404).json({
-                message: 'Usuário destinatário não encontrado'
-            });
-        }
-
+        // Hospedagem (remetente) envia para Usuário (destinatário)
         const result = await client.query(
             `INSERT INTO mensagens 
-             (idusuario_remetente, idusuario_destinatario, mensagem)
+             (id_remetente, id_destinatario, mensagem)
              VALUES ($1, $2, $3) 
              RETURNING *`,
-            [idusuario_remetente, idusuario_destinatario, mensagem.trim()]
+            [idhospedagem, idusuario, mensagem.trim()]
         );
+
+        // Buscar nome da hospedagem remetente
+        const hospedagem = await client.query(
+            'SELECT nome FROM hospedagem WHERE idhospedagem = $1',
+            [idhospedagem]
+        );
+
+        const nomeHospedagem = hospedagem.rows[0]?.nome || 'Hospedagem';
+
+        // Buscar nome do usuário destinatário
+        const usuario = await client.query(
+            'SELECT nome FROM usuario WHERE idusuario = $1',
+            [idusuario]
+        );
+
+        const nomeUsuario = usuario.rows[0]?.nome || 'Usuário';
 
         res.status(201).json({
             message: 'Mensagem enviada com sucesso!',
             data: {
                 ...result.rows[0],
-                nome_remetente: usuarioRemetente.rows[0].nome,
-                nome_destinatario: usuarioDestinatario.rows[0].nome
+                nome_remetente: nomeHospedagem,
+                nome_destinatario: nomeUsuario,
+                nome_hospedagem: nomeHospedagem
             }
         });
 
@@ -250,11 +284,171 @@ async function enviarMensagem(req, res) {
             message: 'Erro ao enviar mensagem',
             error: error.message
         });
-        console.error('Erro ao enviar mensagem:', error);
+        console.error('Erro ao enviar mensagem web:', error);
     } finally {
         if (client) client.release();
     }
 }
+
+async function buscarConversaWeb(req, res) {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idhospedagem, idusuario } = req.params;
+        const { limit = 100, offset = 0 } = req.query;
+
+        if (!idhospedagem || !idusuario) {
+            return res.status(400).json({
+                message: 'idhospedagem e idusuario são obrigatórios'
+            });
+        }
+
+        if (!isValidId(idhospedagem) || !isValidId(idusuario)) {
+            return res.status(400).json({
+                message: 'IDs inválidos'
+            });
+        }
+
+        // Buscar conversa completa entre hospedagem e usuário
+        const query = `
+            SELECT 
+                m.idmensagem,
+                m.id_remetente,
+                m.id_destinatario,
+                m.mensagem,
+                m.data_envio,
+                m.lida,
+                CASE 
+                    WHEN m.id_remetente = $1 THEN h.nome
+                    ELSE ur.nome 
+                END as nome_remetente,
+                CASE 
+                    WHEN m.id_destinatario = $2 THEN ud.nome
+                    ELSE h2.nome 
+                END as nome_destinatario,
+                h.nome as nome_hospedagem
+            FROM mensagens m
+            LEFT JOIN hospedagem h ON m.id_remetente = h.idhospedagem
+            LEFT JOIN hospedagem h2 ON m.id_destinatario = h2.idhospedagem
+            LEFT JOIN usuario ur ON m.id_remetente = ur.idusuario
+            LEFT JOIN usuario ud ON m.id_destinatario = ud.idusuario
+            WHERE (m.id_remetente = $1 AND m.id_destinatario = $2)    -- Hospedagem → Usuário
+               OR (m.id_remetente = $2 AND m.id_destinatario = $1)    -- Usuário → Hospedagem
+            ORDER BY m.data_envio ASC
+            LIMIT $3 OFFSET $4
+        `;
+
+        const result = await client.query(query, [idhospedagem, idusuario, limit, offset]);
+        
+        res.status(200).json({
+            conversa: result.rows,
+            participantes: {
+                idhospedagem: parseInt(idhospedagem),
+                idusuario: parseInt(idusuario),
+                nome_hospedagem: result.rows[0]?.nome_hospedagem || 'Hospedagem'
+            },
+            paginacao: {
+                limit: parseInt(limit),
+                offset: parseInt(offset),
+                total: result.rows.length
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao buscar conversa',
+            error: error.message
+        });
+        console.error('Erro ao buscar conversa web:', error);
+    } finally {
+        if (client) client.release();
+    }
+}
+
+async function listarConversasWeb(req, res) {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idhospedagem } = req.params;
+        const { limit = 20, offset = 0 } = req.query;
+
+        if (!idhospedagem) {
+            return res.status(400).json({
+                message: 'ID da hospedagem é obrigatório'
+            });
+        }
+
+        if (!isValidId(idhospedagem)) {
+            return res.status(400).json({
+                message: 'ID da hospedagem inválido'
+            });
+        }
+
+        // Buscar conversas da hospedagem com usuários
+        const query = `
+            SELECT DISTINCT ON (
+                CASE 
+                    WHEN m.id_remetente = $1 THEN m.id_destinatario 
+                    ELSE m.id_remetente 
+                END
+            )
+                CASE 
+                    WHEN m.id_remetente = $1 THEN m.id_destinatario 
+                    ELSE m.id_remetente 
+                END as idcontato,
+                u.nome as nome_contato,
+                'usuario' as tipo_contato,
+                m.mensagem as ultima_mensagem,
+                m.data_envio as ultima_data,
+                m.lida,
+                (SELECT COUNT(*) 
+                 FROM mensagens 
+                 WHERE id_remetente = $1 
+                 AND id_destinatario = CASE 
+                    WHEN m.id_remetente = $1 THEN m.id_destinatario 
+                    ELSE m.id_remetente 
+                 END
+                 AND lida = false) as nao_lidas
+            FROM mensagens m
+            INNER JOIN usuario u ON (
+                CASE 
+                    WHEN m.id_remetente = $1 THEN m.id_destinatario 
+                    ELSE m.id_remetente 
+                END
+            ) = u.idusuario
+            WHERE m.id_remetente = $1 OR m.id_destinatario = $1
+            ORDER BY 
+                CASE 
+                    WHEN m.id_remetente = $1 THEN m.id_destinatario 
+                    ELSE m.id_remetente 
+                END,
+                m.data_envio DESC
+            LIMIT $2 OFFSET $3
+        `;
+
+        const result = await client.query(query, [idhospedagem, limit, offset]);
+        
+        res.status(200).json({
+            conversas: result.rows,
+            paginacao: {
+                limit: parseInt(limit),
+                offset: parseInt(offset),
+                total: result.rows.length
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao listar conversas',
+            error: error.message
+        });
+        console.error('Erro ao listar conversas web:', error);
+    } finally {
+        if (client) client.release();
+    }
+}
+
+// ==================== MÉTODOS COMPLEMENTARES ====================
 
 async function marcarComoLida(req, res) {
     let client;
@@ -295,526 +489,6 @@ async function marcarComoLida(req, res) {
     }
 }
 
-async function marcarVariasComoLidas(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idsMensagens } = req.body;
-
-        if (!Array.isArray(idsMensagens) || idsMensagens.length === 0) {
-            return res.status(400).json({
-                message: 'Lista de IDs de mensagens é obrigatória'
-            });
-        }
-
-        // Validar todos os IDs
-        for (const id of idsMensagens) {
-            if (!isValidId(id)) {
-                return res.status(400).json({
-                    message: `ID de mensagem inválido: ${id}`
-                });
-            }
-        }
-
-        const placeholders = idsMensagens.map((_, index) => `$${index + 1}`).join(',');
-        const query = `
-            UPDATE mensagens 
-            SET lida = true 
-            WHERE idmensagem IN (${placeholders})
-            RETURNING *
-        `;
-
-        const result = await client.query(query, idsMensagens);
-
-        res.status(200).json({
-            message: `${result.rows.length} mensagens marcadas como lidas!`,
-            data: result.rows
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            message: 'Erro ao marcar mensagens como lidas',
-            error: error.message
-        });
-        console.error('Erro ao marcar mensagens como lidas:', error);
-    } finally {
-        if (client) client.release();
-    }
-}
-
-async function contarNaoLidas(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idusuario } = req.params;
-
-        if (!idusuario) {
-            return res.status(400).json({
-                message: 'ID do usuário é obrigatório'
-            });
-        }
-
-        if (!isValidId(idusuario)) {
-            return res.status(400).json({
-                message: 'ID do usuário inválido'
-            });
-        }
-
-        const result = await client.query(
-            'SELECT COUNT(*) as total_nao_lidas FROM mensagens WHERE idusuario_destinatario = $1 AND lida = false',
-            [idusuario]
-        );
-
-        res.status(200).json({
-            total_nao_lidas: parseInt(result.rows[0].total_nao_lidas)
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            message: 'Erro ao contar mensagens não lidas',
-            error: error.message
-        });
-        console.error('Erro ao contar mensagens não lidas:', error);
-    } finally {
-        if (client) client.release();
-    }
-}
-
-async function deletarMensagem(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idmensagem } = req.params;
-
-        if (!isValidId(idmensagem)) {
-            return res.status(400).json({
-                message: 'ID da mensagem inválido'
-            });
-        }
-
-        const result = await client.query(
-            'DELETE FROM mensagens WHERE idmensagem = $1 RETURNING *',
-            [idmensagem]
-        );
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({
-                message: 'Mensagem não encontrada'
-            });
-        }
-
-        res.status(200).json({
-            message: 'Mensagem removida com sucesso',
-            data: result.rows[0]
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            message: 'Erro ao remover mensagem',
-            error: error.message
-        });
-        console.error('Erro ao remover mensagem:', error);
-    } finally {
-        if (client) client.release();
-    }
-}
-
-// Função adicional: Listar conversas resumidas
-async function listarConversas(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idusuario } = req.params;
-        const { limit = 20, offset = 0 } = req.query;
-
-        if (!idusuario) {
-            return res.status(400).json({
-                message: 'ID do usuário é obrigatório'
-            });
-        }
-
-        if (!isValidId(idusuario)) {
-            return res.status(400).json({
-                message: 'ID do usuário inválido'
-            });
-        }
-
-        const query = `
-            SELECT 
-                DISTINCT ON (
-                    CASE 
-                        WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
-                        ELSE m.idusuario_remetente 
-                    END
-                )
-                CASE 
-                    WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
-                    ELSE m.idusuario_remetente 
-                END as idusuario_contato,
-                CASE 
-                    WHEN m.idusuario_remetente = $1 THEN ud.nome 
-                    ELSE ur.nome 
-                END as nome_contato,
-                m.mensagem as ultima_mensagem,
-                m.data_envio as ultima_data,
-                m.lida,
-                (SELECT COUNT(*) 
-                 FROM mensagens 
-                 WHERE ((idusuario_remetente = $1 AND idusuario_destinatario = 
-                        CASE 
-                            WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
-                            ELSE m.idusuario_remetente 
-                        END)
-                     OR (idusuario_destinatario = $1 AND idusuario_remetente = 
-                        CASE 
-                            WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
-                            ELSE m.idusuario_remetente 
-                        END))
-                 AND lida = false AND idusuario_destinatario = $1) as nao_lidas
-            FROM mensagens m
-            INNER JOIN usuario ur ON m.idusuario_remetente = ur.idusuario
-            INNER JOIN usuario ud ON m.idusuario_destinatario = ud.idusuario
-            WHERE m.idusuario_remetente = $1 OR m.idusuario_destinatario = $1
-            ORDER BY 
-                CASE 
-                    WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
-                    ELSE m.idusuario_remetente 
-                END,
-                m.data_envio DESC
-            LIMIT $2 OFFSET $3
-        `;
-
-        const result = await client.query(query, [idusuario, limit, offset]);
-        
-        res.status(200).json({
-            conversas: result.rows,
-            paginacao: {
-                limit: parseInt(limit),
-                offset: parseInt(offset),
-                total: result.rows.length
-            }
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            message: 'Erro ao listar conversas',
-            error: error.message
-        });
-        console.error('Erro ao listar conversas:', error);
-    } finally {
-        if (client) client.release();
-    }
-}
-
-async function enviarMensagemMobile(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idusuario, idhospedagem, mensagem } = req.body;
-
-        // Validações
-        if (!idusuario || !idhospedagem || !mensagem) {
-            return res.status(400).json({
-                message: 'idusuario, idhospedagem e mensagem são obrigatórios'
-            });
-        }
-
-        if (mensagem.trim().length === 0) {
-            return res.status(400).json({
-                message: 'A mensagem não pode estar vazia'
-            });
-        }
-
-        // Verificar se o usuário existe
-        const usuario = await client.query(
-            'SELECT idusuario, nome FROM usuario WHERE idusuario = $1',
-            [idusuario]
-        );
-
-        if (usuario.rows.length === 0) {
-            return res.status(404).json({
-                message: 'Usuário não encontrado'
-            });
-        }
-
-        // Verificar se a hospedagem existe
-        const hospedagem = await client.query(
-            'SELECT idhospedagem, nome FROM hospedagem WHERE idhospedagem = $1',
-            [idhospedagem]
-        );
-
-        if (hospedagem.rows.length === 0) {
-            return res.status(404).json({
-                message: 'Hospedagem não encontrada'
-            });
-        }
-
-        // Criar ou obter usuário especial para a hospedagem
-        // Usamos um ID negativo ou um padrão para identificar hospedagens
-        const idHospedagemUsuario = -idhospedagem; // ID negativo para identificar como hospedagem
-        const nomeHospedagem = hospedagem.rows[0].nome;
-
-        // Inserir mensagem no banco - usuário envia para a "hospedagem" (ID negativo)
-        const result = await client.query(
-            `INSERT INTO mensagens 
-             (idusuario_remetente, idusuario_destinatario, mensagem)
-             VALUES ($1, $2, $3) 
-             RETURNING *`,
-            [idusuario, idHospedagemUsuario, mensagem.trim()]
-        );
-
-        res.status(201).json({
-            message: 'Mensagem enviada com sucesso!',
-            data: {
-                ...result.rows[0],
-                nome_remetente: usuario.rows[0].nome,
-                nome_destinatario: nomeHospedagem, // Nome da hospedagem como "usuário"
-                nome_hospedagem: nomeHospedagem
-            }
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            message: 'Erro ao enviar mensagem',
-            error: error.message
-        });
-        console.error('Erro ao enviar mensagem mobile:', error);
-    } finally {
-        if (client) client.release();
-    }
-}
-
-async function buscarConversaMobile(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idusuario, idhospedagem } = req.params;
-        const { limit = 100, offset = 0 } = req.query;
-
-        if (!idusuario || !idhospedagem) {
-            return res.status(400).json({
-                message: 'idusuario e idhospedagem são obrigatórios'
-            });
-        }
-
-        // Verificar se a hospedagem existe
-        const hospedagem = await client.query(
-            'SELECT idhospedagem, nome FROM hospedagem WHERE idhospedagem = $1',
-            [idhospedagem]
-        );
-
-        if (hospedagem.rows.length === 0) {
-            return res.status(404).json({
-                message: 'Hospedagem não encontrada'
-            });
-        }
-
-        const nomeHospedagem = hospedagem.rows[0].nome;
-        const idHospedagemUsuario = -idhospedagem; // Mesmo ID negativo
-
-        // Buscar conversa entre o usuário e a hospedagem (ID negativo)
-        const query = `
-            SELECT 
-                m.idmensagem,
-                m.idusuario_remetente,
-                m.idusuario_destinatario,
-                m.mensagem,
-                m.data_envio,
-                m.lida,
-                ur.nome as nome_remetente,
-                $2 as nome_destinatario
-            FROM mensagens m
-            INNER JOIN usuario ur ON m.idusuario_remetente = ur.idusuario
-            WHERE (m.idusuario_remetente = $1 AND m.idusuario_destinatario = $3)
-               OR (m.idusuario_remetente = $3 AND m.idusuario_destinatario = $1)
-            ORDER BY m.data_envio ASC
-            LIMIT $4 OFFSET $5
-        `;
-
-        const result = await client.query(query, [idusuario, nomeHospedagem, idHospedagemUsuario, limit, offset]);
-        
-        res.status(200).json({
-            conversa: result.rows,
-            participantes: {
-                idusuario: parseInt(idusuario),
-                idhospedagem: parseInt(idhospedagem),
-                nome_hospedagem: nomeHospedagem
-            },
-            paginacao: {
-                limit: parseInt(limit),
-                offset: parseInt(offset),
-                total: result.rows.length
-            }
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            message: 'Erro ao buscar conversa',
-            error: error.message
-        });
-        console.error('Erro ao buscar conversa mobile:', error);
-    } finally {
-        if (client) client.release();
-    }
-}
-
-async function buscarConversaMobile(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idusuario, idhospedagem } = req.params;
-        const { limit = 100, offset = 0 } = req.query;
-
-        if (!idusuario || !idhospedagem) {
-            return res.status(400).json({
-                message: 'idusuario e idhospedagem são obrigatórios'
-            });
-        }
-
-        if (!isValidId(idusuario) || !isValidId(idhospedagem)) {
-            return res.status(400).json({
-                message: 'IDs inválidos'
-            });
-        }
-
-        // Buscar o ID do proprietário da hospedagem
-        const proprietarioHospedagem = await client.query(
-            'SELECT idusuario FROM hospedagem WHERE idhospedagem = $1',
-            [idhospedagem]
-        );
-
-        if (proprietarioHospedagem.rows.length === 0) {
-            return res.status(404).json({
-                message: 'Hospedagem não encontrada'
-            });
-        }
-
-        const idProprietario = proprietarioHospedagem.rows[0].idusuario;
-
-        // Buscar conversa entre o usuário e o proprietário da hospedagem
-        const query = `
-            SELECT 
-                m.idmensagem,
-                m.idusuario_remetente,
-                m.idusuario_destinatario,
-                m.mensagem,
-                m.data_envio,
-                m.lida,
-                ur.nome as nome_remetente,
-                ud.nome as nome_destinatario
-            FROM mensagens m
-            INNER JOIN usuario ur ON m.idusuario_remetente = ur.idusuario
-            INNER JOIN usuario ud ON m.idusuario_destinatario = ud.idusuario
-            WHERE (m.idusuario_remetente = $1 AND m.idusuario_destinatario = $2)
-               OR (m.idusuario_remetente = $2 AND m.idusuario_destinatario = $1)
-            ORDER BY m.data_envio ASC
-            LIMIT $3 OFFSET $4
-        `;
-
-        const result = await client.query(query, [idusuario, idProprietario, limit, offset]);
-        
-        res.status(200).json({
-            conversa: result.rows,
-            participantes: {
-                idusuario: parseInt(idusuario),
-                idhospedagem: parseInt(idhospedagem),
-                idproprietario: idProprietario
-            },
-            paginacao: {
-                limit: parseInt(limit),
-                offset: parseInt(offset),
-                total: result.rows.length
-            }
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            message: 'Erro ao buscar conversa',
-            error: error.message
-        });
-        console.error('Erro ao buscar conversa mobile:', error);
-    } finally {
-        if (client) client.release();
-    }
-}
-
-async function listarConversasMobile(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idusuario } = req.params;
-        const { limit = 20, offset = 0 } = req.query;
-
-        if (!idusuario) {
-            return res.status(400).json({
-                message: 'ID do usuário é obrigatório'
-            });
-        }
-
-        // Buscar hospedagens que o usuário tem contrato
-        const query = `
-            SELECT 
-                h.idhospedagem as idcontato,
-                h.nome as nome_contato,
-                'hospedagem' as tipo_contato,
-                COALESCE(
-                    (SELECT m.mensagem 
-                     FROM mensagens m 
-                     WHERE m.idusuario_remetente = $1 
-                     AND m.idusuario_destinatario = (10000 + h.idhospedagem)
-                     ORDER BY m.data_envio DESC 
-                     LIMIT 1),
-                    (SELECT m.mensagem 
-                     FROM mensagens m 
-                     WHERE m.idusuario_remetente = (10000 + h.idhospedagem)
-                     AND m.idusuario_destinatario = $1
-                     ORDER BY m.data_envio DESC 
-                     LIMIT 1),
-                    'Nenhuma mensagem ainda'
-                ) as ultima_mensagem,
-                COALESCE(
-                    (SELECT m.data_envio 
-                     FROM mensagens m 
-                     WHERE (m.idusuario_remetente = $1 AND m.idusuario_destinatario = (10000 + h.idhospedagem))
-                        OR (m.idusuario_remetente = (10000 + h.idhospedagem) AND m.idusuario_destinatario = $1)
-                     ORDER BY m.data_envio DESC 
-                     LIMIT 1),
-                    NOW()
-                ) as ultima_data,
-                (SELECT COUNT(*) 
-                 FROM mensagens 
-                 WHERE idusuario_destinatario = $1 
-                 AND idusuario_remetente = (10000 + h.idhospedagem)
-                 AND lida = false) as nao_lidas
-            FROM hospedagem h
-            INNER JOIN contrato c ON h.idhospedagem = c.idhospedagem
-            WHERE c.idusuario = $1
-            ORDER BY ultima_data DESC
-            LIMIT $2 OFFSET $3
-        `;
-
-        const result = await client.query(query, [idusuario, limit, offset]);
-        
-        res.status(200).json({
-            conversas: result.rows,
-            paginacao: {
-                limit: parseInt(limit),
-                offset: parseInt(offset),
-                total: result.rows.length
-            }
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            message: 'Erro ao listar conversas',
-            error: error.message
-        });
-        console.error('Erro ao listar conversas mobile:', error);
-    } finally {
-        if (client) client.release();
-    }
-}
-
 async function contarNaoLidasMobile(req, res) {
     let client;
     try {
@@ -834,7 +508,7 @@ async function contarNaoLidasMobile(req, res) {
         }
 
         const result = await client.query(
-            'SELECT COUNT(*) as total_nao_lidas FROM mensagens WHERE idusuario_destinatario = $1 AND lida = false',
+            'SELECT COUNT(*) as total_nao_lidas FROM mensagens WHERE id_destinatario = $1 AND lida = false',
             [idusuario]
         );
 
@@ -847,24 +521,63 @@ async function contarNaoLidasMobile(req, res) {
             message: 'Erro ao contar mensagens não lidas',
             error: error.message
         });
-        console.error('Erro ao contar mensagens não lidas mobile:', error);
+        console.error('Erro ao contar mensagens não lidas:', error);
+    } finally {
+        if (client) client.release();
+    }
+}
+
+async function contarNaoLidasWeb(req, res) {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idhospedagem } = req.params;
+
+        if (!idhospedagem) {
+            return res.status(400).json({
+                message: 'ID da hospedagem é obrigatório'
+            });
+        }
+
+        if (!isValidId(idhospedagem)) {
+            return res.status(400).json({
+                message: 'ID da hospedagem inválido'
+            });
+        }
+
+        const result = await client.query(
+            'SELECT COUNT(*) as total_nao_lidas FROM mensagens WHERE id_destinatario = $1 AND lida = false',
+            [idhospedagem]
+        );
+
+        res.status(200).json({
+            total_nao_lidas: parseInt(result.rows[0].total_nao_lidas)
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao contar mensagens não lidas',
+            error: error.message
+        });
+        console.error('Erro ao contar mensagens não lidas:', error);
     } finally {
         if (client) client.release();
     }
 }
 
 module.exports = {
-    listarMensagens,
-    buscarConversa,
-    buscarMensagem,
-    enviarMensagem,
-    marcarComoLida,
-    marcarVariasComoLidas,
-    contarNaoLidas,
-    deletarMensagem,
-    listarConversas,
+    // Métodos Mobile
     enviarMensagemMobile,
     buscarConversaMobile,
     listarConversasMobile,
-    contarNaoLidasMobile
+    contarNaoLidasMobile,
+    
+    // Métodos Web
+    enviarMensagemWeb,
+    buscarConversaWeb,
+    listarConversasWeb,
+    contarNaoLidasWeb,
+    
+    // Métodos Complementares
+    marcarComoLida
 };
