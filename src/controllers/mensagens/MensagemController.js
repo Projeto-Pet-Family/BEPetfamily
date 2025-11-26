@@ -543,9 +543,9 @@ async function enviarMensagemMobile(req, res) {
             });
         }
 
-        // Verificar se a hospedagem existe (assumindo que hospedagem está na tabela usuario)
+        // Verificar se a hospedagem existe na tabela de hospedagens
         const hospedagem = await client.query(
-            'SELECT idusuario, nome FROM usuario WHERE idusuario = $1',
+            'SELECT idhospedagem, nome FROM hospedagem WHERE idhospedagem = $1',
             [idhospedagem]
         );
 
@@ -555,13 +555,34 @@ async function enviarMensagemMobile(req, res) {
             });
         }
 
-        // Inserir mensagem no banco
+        // Para enviar mensagem, precisamos do ID do proprietário/dono da hospedagem
+        // Buscar o ID do usuário proprietário da hospedagem
+        const proprietarioHospedagem = await client.query(
+            'SELECT idusuario FROM hospedagem WHERE idhospedagem = $1',
+            [idhospedagem]
+        );
+
+        if (proprietarioHospedagem.rows.length === 0) {
+            return res.status(404).json({
+                message: 'Proprietário da hospedagem não encontrado'
+            });
+        }
+
+        const idProprietario = proprietarioHospedagem.rows[0].idusuario;
+
+        // Buscar nome do proprietário
+        const nomeProprietario = await client.query(
+            'SELECT nome FROM usuario WHERE idusuario = $1',
+            [idProprietario]
+        );
+
+        // Inserir mensagem no banco (usuário envia para o proprietário da hospedagem)
         const result = await client.query(
             `INSERT INTO mensagens 
              (idusuario_remetente, idusuario_destinatario, mensagem)
              VALUES ($1, $2, $3) 
              RETURNING *`,
-            [idusuario, idhospedagem, mensagem.trim()]
+            [idusuario, idProprietario, mensagem.trim()]
         );
 
         res.status(201).json({
@@ -569,7 +590,7 @@ async function enviarMensagemMobile(req, res) {
             data: {
                 ...result.rows[0],
                 nome_remetente: usuario.rows[0].nome,
-                nome_destinatario: hospedagem.rows[0].nome
+                nome_destinatario: nomeProprietario.rows[0].nome
             }
         });
 
@@ -603,6 +624,21 @@ async function buscarConversaMobile(req, res) {
             });
         }
 
+        // Buscar o ID do proprietário da hospedagem
+        const proprietarioHospedagem = await client.query(
+            'SELECT idusuario FROM hospedagem WHERE idhospedagem = $1',
+            [idhospedagem]
+        );
+
+        if (proprietarioHospedagem.rows.length === 0) {
+            return res.status(404).json({
+                message: 'Hospedagem não encontrada'
+            });
+        }
+
+        const idProprietario = proprietarioHospedagem.rows[0].idusuario;
+
+        // Buscar conversa entre o usuário e o proprietário da hospedagem
         const query = `
             SELECT 
                 m.idmensagem,
@@ -622,13 +658,14 @@ async function buscarConversaMobile(req, res) {
             LIMIT $3 OFFSET $4
         `;
 
-        const result = await client.query(query, [idusuario, idhospedagem, limit, offset]);
+        const result = await client.query(query, [idusuario, idProprietario, limit, offset]);
         
         res.status(200).json({
             conversa: result.rows,
             participantes: {
                 idusuario: parseInt(idusuario),
-                idhospedagem: parseInt(idhospedagem)
+                idhospedagem: parseInt(idhospedagem),
+                idproprietario: idProprietario
             },
             paginacao: {
                 limit: parseInt(limit),
@@ -667,48 +704,48 @@ async function listarConversasMobile(req, res) {
             });
         }
 
-        // Buscar conversas onde o usuário é remetente ou destinatário
+        // Buscar conversas onde o usuário tem contratos com hospedagens
         const query = `
-            SELECT 
-                DISTINCT ON (
-                    CASE 
-                        WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
-                        ELSE m.idusuario_remetente 
-                    END
-                )
-                CASE 
-                    WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
-                    ELSE m.idusuario_remetente 
-                END as idcontato,
-                CASE 
-                    WHEN m.idusuario_remetente = $1 THEN ud.nome 
-                    ELSE ur.nome 
-                END as nome_contato,
-                CASE 
-                    WHEN m.idusuario_remetente = $1 THEN 'hospedagem' 
-                    ELSE 'usuario' 
-                END as tipo_contato,
-                m.mensagem as ultima_mensagem,
-                m.data_envio as ultima_data,
-                m.lida,
+            SELECT DISTINCT ON (h.idhospedagem)
+                h.idhospedagem as idcontato,
+                h.nome as nome_contato,
+                'hospedagem' as tipo_contato,
+                COALESCE(
+                    (SELECT m.mensagem 
+                     FROM mensagens m 
+                     WHERE (m.idusuario_remetente = $1 AND m.idusuario_destinatario = h.idusuario)
+                        OR (m.idusuario_remetente = h.idusuario AND m.idusuario_destinatario = $1)
+                     ORDER BY m.data_envio DESC 
+                     LIMIT 1),
+                    'Nenhuma mensagem ainda'
+                ) as ultima_mensagem,
+                COALESCE(
+                    (SELECT m.data_envio 
+                     FROM mensagens m 
+                     WHERE (m.idusuario_remetente = $1 AND m.idusuario_destinatario = h.idusuario)
+                        OR (m.idusuario_remetente = h.idusuario AND m.idusuario_destinatario = $1)
+                     ORDER BY m.data_envio DESC 
+                     LIMIT 1),
+                    NOW()
+                ) as ultima_data,
+                COALESCE(
+                    (SELECT m.lida 
+                     FROM mensagens m 
+                     WHERE (m.idusuario_remetente = $1 AND m.idusuario_destinatario = h.idusuario)
+                        OR (m.idusuario_remetente = h.idusuario AND m.idusuario_destinatario = $1)
+                     ORDER BY m.data_envio DESC 
+                     LIMIT 1),
+                    true
+                ) as lida,
                 (SELECT COUNT(*) 
                  FROM mensagens 
                  WHERE idusuario_destinatario = $1 
-                 AND lida = false 
-                 AND idusuario_remetente = CASE 
-                    WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
-                    ELSE m.idusuario_remetente 
-                 END) as nao_lidas
-            FROM mensagens m
-            INNER JOIN usuario ur ON m.idusuario_remetente = ur.idusuario
-            INNER JOIN usuario ud ON m.idusuario_destinatario = ud.idusuario
-            WHERE m.idusuario_remetente = $1 OR m.idusuario_destinatario = $1
-            ORDER BY 
-                CASE 
-                    WHEN m.idusuario_remetente = $1 THEN m.idusuario_destinatario 
-                    ELSE m.idusuario_remetente 
-                END,
-                m.data_envio DESC
+                 AND idusuario_remetente = h.idusuario
+                 AND lida = false) as nao_lidas
+            FROM hospedagem h
+            INNER JOIN contrato c ON h.idhospedagem = c.idhospedagem
+            WHERE c.idusuario = $1
+            ORDER BY h.idhospedagem, ultima_data DESC
             LIMIT $2 OFFSET $3
         `;
 
