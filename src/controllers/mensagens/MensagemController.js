@@ -512,16 +512,10 @@ async function enviarMensagemMobile(req, res) {
         client = await pool.connect();
         const { idusuario, idhospedagem, mensagem } = req.body;
 
-        // Validações específicas para mobile
+        // Validações
         if (!idusuario || !idhospedagem || !mensagem) {
             return res.status(400).json({
                 message: 'idusuario, idhospedagem e mensagem são obrigatórios'
-            });
-        }
-
-        if (!isValidId(idusuario) || !isValidId(idhospedagem)) {
-            return res.status(400).json({
-                message: 'IDs inválidos'
             });
         }
 
@@ -543,7 +537,7 @@ async function enviarMensagemMobile(req, res) {
             });
         }
 
-        // Verificar se a hospedagem existe na tabela de hospedagens
+        // Verificar se a hospedagem existe
         const hospedagem = await client.query(
             'SELECT idhospedagem, nome FROM hospedagem WHERE idhospedagem = $1',
             [idhospedagem]
@@ -555,34 +549,18 @@ async function enviarMensagemMobile(req, res) {
             });
         }
 
-        // Para enviar mensagem, precisamos do ID do proprietário/dono da hospedagem
-        // Buscar o ID do usuário proprietário da hospedagem
-        const proprietarioHospedagem = await client.query(
-            'SELECT idusuario FROM hospedagem WHERE idhospedagem = $1',
-            [idhospedagem]
-        );
+        // Criar ou obter usuário especial para a hospedagem
+        // Usamos um ID negativo ou um padrão para identificar hospedagens
+        const idHospedagemUsuario = -idhospedagem; // ID negativo para identificar como hospedagem
+        const nomeHospedagem = hospedagem.rows[0].nome;
 
-        if (proprietarioHospedagem.rows.length === 0) {
-            return res.status(404).json({
-                message: 'Proprietário da hospedagem não encontrado'
-            });
-        }
-
-        const idProprietario = proprietarioHospedagem.rows[0].idusuario;
-
-        // Buscar nome do proprietário
-        const nomeProprietario = await client.query(
-            'SELECT nome FROM usuario WHERE idusuario = $1',
-            [idProprietario]
-        );
-
-        // Inserir mensagem no banco (usuário envia para o proprietário da hospedagem)
+        // Inserir mensagem no banco - usuário envia para a "hospedagem" (ID negativo)
         const result = await client.query(
             `INSERT INTO mensagens 
              (idusuario_remetente, idusuario_destinatario, mensagem)
              VALUES ($1, $2, $3) 
              RETURNING *`,
-            [idusuario, idProprietario, mensagem.trim()]
+            [idusuario, idHospedagemUsuario, mensagem.trim()]
         );
 
         res.status(201).json({
@@ -590,7 +568,8 @@ async function enviarMensagemMobile(req, res) {
             data: {
                 ...result.rows[0],
                 nome_remetente: usuario.rows[0].nome,
-                nome_destinatario: nomeProprietario.rows[0].nome
+                nome_destinatario: nomeHospedagem, // Nome da hospedagem como "usuário"
+                nome_hospedagem: nomeHospedagem
             }
         });
 
@@ -600,6 +579,80 @@ async function enviarMensagemMobile(req, res) {
             error: error.message
         });
         console.error('Erro ao enviar mensagem mobile:', error);
+    } finally {
+        if (client) client.release();
+    }
+}
+
+async function buscarConversaMobile(req, res) {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idusuario, idhospedagem } = req.params;
+        const { limit = 100, offset = 0 } = req.query;
+
+        if (!idusuario || !idhospedagem) {
+            return res.status(400).json({
+                message: 'idusuario e idhospedagem são obrigatórios'
+            });
+        }
+
+        // Verificar se a hospedagem existe
+        const hospedagem = await client.query(
+            'SELECT idhospedagem, nome FROM hospedagem WHERE idhospedagem = $1',
+            [idhospedagem]
+        );
+
+        if (hospedagem.rows.length === 0) {
+            return res.status(404).json({
+                message: 'Hospedagem não encontrada'
+            });
+        }
+
+        const nomeHospedagem = hospedagem.rows[0].nome;
+        const idHospedagemUsuario = -idhospedagem; // Mesmo ID negativo
+
+        // Buscar conversa entre o usuário e a hospedagem (ID negativo)
+        const query = `
+            SELECT 
+                m.idmensagem,
+                m.idusuario_remetente,
+                m.idusuario_destinatario,
+                m.mensagem,
+                m.data_envio,
+                m.lida,
+                ur.nome as nome_remetente,
+                $2 as nome_destinatario
+            FROM mensagens m
+            INNER JOIN usuario ur ON m.idusuario_remetente = ur.idusuario
+            WHERE (m.idusuario_remetente = $1 AND m.idusuario_destinatario = $3)
+               OR (m.idusuario_remetente = $3 AND m.idusuario_destinatario = $1)
+            ORDER BY m.data_envio ASC
+            LIMIT $4 OFFSET $5
+        `;
+
+        const result = await client.query(query, [idusuario, nomeHospedagem, idHospedagemUsuario, limit, offset]);
+        
+        res.status(200).json({
+            conversa: result.rows,
+            participantes: {
+                idusuario: parseInt(idusuario),
+                idhospedagem: parseInt(idhospedagem),
+                nome_hospedagem: nomeHospedagem
+            },
+            paginacao: {
+                limit: parseInt(limit),
+                offset: parseInt(offset),
+                total: result.rows.length
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao buscar conversa',
+            error: error.message
+        });
+        console.error('Erro ao buscar conversa mobile:', error);
     } finally {
         if (client) client.release();
     }
@@ -698,23 +751,23 @@ async function listarConversasMobile(req, res) {
             });
         }
 
-        if (!isValidId(idusuario)) {
-            return res.status(400).json({
-                message: 'ID do usuário inválido'
-            });
-        }
-
-        // Buscar conversas onde o usuário tem contratos com hospedagens
+        // Buscar hospedagens que o usuário tem contrato
         const query = `
-            SELECT DISTINCT ON (h.idhospedagem)
+            SELECT 
                 h.idhospedagem as idcontato,
                 h.nome as nome_contato,
                 'hospedagem' as tipo_contato,
                 COALESCE(
                     (SELECT m.mensagem 
                      FROM mensagens m 
-                     WHERE (m.idusuario_remetente = $1 AND m.idusuario_destinatario = h.idusuario)
-                        OR (m.idusuario_remetente = h.idusuario AND m.idusuario_destinatario = $1)
+                     WHERE m.idusuario_remetente = $1 
+                     AND m.idusuario_destinatario = (10000 + h.idhospedagem)
+                     ORDER BY m.data_envio DESC 
+                     LIMIT 1),
+                    (SELECT m.mensagem 
+                     FROM mensagens m 
+                     WHERE m.idusuario_remetente = (10000 + h.idhospedagem)
+                     AND m.idusuario_destinatario = $1
                      ORDER BY m.data_envio DESC 
                      LIMIT 1),
                     'Nenhuma mensagem ainda'
@@ -722,30 +775,21 @@ async function listarConversasMobile(req, res) {
                 COALESCE(
                     (SELECT m.data_envio 
                      FROM mensagens m 
-                     WHERE (m.idusuario_remetente = $1 AND m.idusuario_destinatario = h.idusuario)
-                        OR (m.idusuario_remetente = h.idusuario AND m.idusuario_destinatario = $1)
+                     WHERE (m.idusuario_remetente = $1 AND m.idusuario_destinatario = (10000 + h.idhospedagem))
+                        OR (m.idusuario_remetente = (10000 + h.idhospedagem) AND m.idusuario_destinatario = $1)
                      ORDER BY m.data_envio DESC 
                      LIMIT 1),
                     NOW()
                 ) as ultima_data,
-                COALESCE(
-                    (SELECT m.lida 
-                     FROM mensagens m 
-                     WHERE (m.idusuario_remetente = $1 AND m.idusuario_destinatario = h.idusuario)
-                        OR (m.idusuario_remetente = h.idusuario AND m.idusuario_destinatario = $1)
-                     ORDER BY m.data_envio DESC 
-                     LIMIT 1),
-                    true
-                ) as lida,
                 (SELECT COUNT(*) 
                  FROM mensagens 
                  WHERE idusuario_destinatario = $1 
-                 AND idusuario_remetente = h.idusuario
+                 AND idusuario_remetente = (10000 + h.idhospedagem)
                  AND lida = false) as nao_lidas
             FROM hospedagem h
             INNER JOIN contrato c ON h.idhospedagem = c.idhospedagem
             WHERE c.idusuario = $1
-            ORDER BY h.idhospedagem, ultima_data DESC
+            ORDER BY ultima_data DESC
             LIMIT $2 OFFSET $3
         `;
 
