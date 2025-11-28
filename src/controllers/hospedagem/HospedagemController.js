@@ -180,6 +180,9 @@ async function criarHospedagem(req, res) {
             }
         }
 
+        // REMOVIDA A VERIFICAÇÃO DE DUPLICAÇÃO DE NOME NO MESMO ENDEREÇO
+        // Agora múltiplas hospedagens podem usar o mesmo endereço
+
         // Hash da senha se fornecida
         let senhaHash = null;
         if (senha) {
@@ -238,8 +241,10 @@ async function criarHospedagem(req, res) {
     } catch (error) {
         // Verificar se é erro de duplicação
         if (error.code === '23505') {
+            // REMOVIDA A VERIFICAÇÃO ESPECÍFICA PARA NOME/ENDEREÇO DUPLICADO
+            // Agora apenas trata erros gerais de duplicação
             return res.status(409).json({
-                message: 'Já existe uma hospedagem com este nome no mesmo endereço'
+                message: 'Erro de duplicação - verifique se email ou CNPJ já estão cadastrados'
             });
         }
         
@@ -329,6 +334,8 @@ async function atualizarHospedagem(req, res) {
             }
         }
 
+        // REMOVIDA A VERIFICAÇÃO DE DUPLICAÇÃO DE NOME NO MESMO ENDEREÇO PARA ATUALIZAÇÃO
+
         // Hash da senha se fornecida
         let senhaHash = undefined;
         if (senha) {
@@ -412,8 +419,9 @@ async function atualizarHospedagem(req, res) {
 
     } catch (error) {
         if (error.code === '23505') {
+            // REMOVIDA A VERIFICAÇÃO ESPECÍFICA PARA NOME/ENDEREÇO DUPLICADO
             return res.status(409).json({
-                message: 'Já existe uma hospedagem com este nome no mesmo endereço'
+                message: 'Erro de duplicação - verifique se email ou CNPJ já estão cadastrados'
             });
         }
         
