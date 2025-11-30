@@ -271,7 +271,6 @@ async function inserirPetPadraoAoRegistrar(idUsuario, petData, client) {
         console.log(`🐾 Iniciando criação de pet para usuário: ${idUsuario}`);
         console.log(`📦 Dados do pet:`, petData);
 
-        // Extrai os dados do pet ou usa valores padrão se não fornecidos
         const {
             nome = 'Meu Pet',
             sexo = 'M',
@@ -281,7 +280,6 @@ async function inserirPetPadraoAoRegistrar(idUsuario, petData, client) {
             observacoes = null
         } = petData;
 
-        // Validações básicas
         if (!nome || nome.trim() === '') {
             throw new Error('Nome do pet é obrigatório');
         }
@@ -298,9 +296,7 @@ async function inserirPetPadraoAoRegistrar(idUsuario, petData, client) {
         console.log(`   🐶 Espécie ID: ${idEspecie}`);
         console.log(`   🐕 Raça ID: ${idRaca}`);
         console.log(`   📝 Observações: ${observacoes}`);
-
-        // Inserir pet com os dados fornecidos
-        const result = await client.query(
+        result = await client.query(
             `INSERT INTO Pet 
              (idUsuario, idPorte, idEspecie, idRaca, nome, sexo, observacoes) 
              VALUES ($1, $2, $3, $4, $5, $6, $7) 

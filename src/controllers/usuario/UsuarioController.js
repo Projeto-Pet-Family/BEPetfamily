@@ -60,7 +60,6 @@ async function inserirUsuario(req, res) {
             senha,
             esqueceuSenha = false,
             dataCadastro = new Date(),
-            // ✅ NOVO: Dados do pet vindo do request
             petData = {}
         } = req.body;
 
@@ -83,11 +82,9 @@ async function inserirUsuario(req, res) {
         const novoUsuario = userResult.rows[0];
         const idUsuario = novoUsuario.idusuario;
 
-        // ✅ CORREÇÃO: Criar pet com os dados fornecidos pelo usuário
         console.log(`🔄 Criando pet para o novo usuário ID: ${idUsuario}`);
         
         try {
-            // Verifica se há dados suficientes para criar o pet
             const hasPetData = petData && 
                               petData.nome && 
                               petData.nome.trim() !== '' && 
@@ -119,7 +116,7 @@ async function inserirUsuario(req, res) {
             message: 'Usuário criado com sucesso!' + (novoUsuario.petCriado ? ' e pet cadastrado!' : ''),
             data: {
                 usuario: novoUsuario,
-                idusuario: novoUsuario.idusuario // ✅ Garante que o ID está disponível
+                idusuario: novoUsuario.idusuario 
             }
         };
 
