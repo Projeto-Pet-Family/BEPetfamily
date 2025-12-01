@@ -63,6 +63,39 @@ async function inserirUsuario(req, res) {
             petData = {}
         } = req.body;
 
+        console.log('📦 Dados recebidos do frontend:');
+        console.log('👤 Usuário:', { nome, cpf, email });
+        console.log('🐾 Pet Data:', petData);
+
+        // Validações básicas do usuário
+        if (!nome || nome.trim() === '') {
+            return res.status(400).json({
+                success: false,
+                message: 'Nome do usuário é obrigatório'
+            });
+        }
+
+        if (!cpf || cpf.trim() === '') {
+            return res.status(400).json({
+                success: false,
+                message: 'CPF é obrigatório'
+            });
+        }
+
+        if (!email || email.trim() === '') {
+            return res.status(400).json({
+                success: false,
+                message: 'Email é obrigatório'
+            });
+        }
+
+        if (!senha || senha.trim() === '') {
+            return res.status(400).json({
+                success: false,
+                message: 'Senha é obrigatória'
+            });
+        }
+
         // Hash da senha
         const saltRounds = 10;
         const senhaHash = await bcrypt.hash(senha, saltRounds);
@@ -76,36 +109,136 @@ async function inserirUsuario(req, res) {
              (nome, cpf, email, telefone, senha, esqueceuSenha, dataCadastro) 
              VALUES ($1, $2, $3, $4, $5, $6, $7) 
              RETURNING idUsuario, nome, email, cpf, telefone, dataCadastro`,
-            [nome, cpf, email, telefone, senhaHash, esqueceuSenha, dataCadastro]
+            [nome.trim(), cpf.trim(), email.trim(), telefone?.trim(), senhaHash, esqueceuSenha, dataCadastro]
         );
 
         const novoUsuario = userResult.rows[0];
         const idUsuario = novoUsuario.idusuario;
 
-        console.log(`🔄 Criando pet para o novo usuário ID: ${idUsuario}`);
+        console.log(`✅ Usuário criado com ID: ${idUsuario}`);
+
+        // Processar petData se existir
+        let petCriado = null;
         
-        try {
-            const hasPetData = petData && 
-                              petData.nome && 
-                              petData.nome.trim() !== '' && 
-                              petData.sexo;
+        if (petData && Object.keys(petData).length > 0) {
+            console.log(`🔄 Processando dados do pet para usuário ID: ${idUsuario}`);
             
-            if (hasPetData) {
-                const petCriado = await inserirPetPadraoAoRegistrar(idUsuario, petData, client);
-                console.log('✅ Pet criado com sucesso:', petCriado);
+            try {
+                // Validações do pet
+                const errors = [];
                 
-                // Adiciona info do pet na resposta
-                novoUsuario.petCriado = {
-                    idPet: petCriado.idpet,
-                    nome: petCriado.nome,
-                    sexo: petCriado.sexo
-                };
-            } else {
-                console.log('ℹ️ Nenhum dado de pet fornecido ou dados insuficientes');
+                if (!petData.nome || petData.nome.trim() === '') {
+                    errors.push('Nome do pet é obrigatório');
+                }
+                
+                if (!petData.sexo || petData.sexo.trim() === '') {
+                    errors.push('Sexo do pet é obrigatório');
+                } else if (!['M', 'F', 'm', 'f'].includes(petData.sexo.trim())) {
+                    errors.push('Sexo do pet deve ser "M" ou "F"');
+                }
+                
+                if (errors.length > 0) {
+                    console.log('❌ Erros de validação do pet:', errors);
+                    // Não fazemos rollback, apenas ignora o pet e continua com usuário
+                    console.log('ℹ️ Criando apenas usuário (sem pet) devido a erros de validação');
+                } else {
+                    // Preparar dados do pet
+                    const petNome = petData.nome.trim();
+                    const petSexo = petData.sexo.trim().toUpperCase();
+                    const petIdPorte = petData.idPorte && petData.idPorte > 0 ? petData.idPorte : null;
+                    const petIdEspecie = petData.idEspecie && petData.idEspecie > 0 ? petData.idEspecie : null;
+                    const petIdRaca = petData.idRaca && petData.idRaca > 0 ? petData.idRaca : null;
+                    const petObservacoes = petData.observacoes ? petData.observacoes.trim() : null;
+
+                    console.log(`🔍 Dados finais do pet:`);
+                    console.log(`   👤 ID Usuário: ${idUsuario}`);
+                    console.log(`   🐾 Nome: ${petNome}`);
+                    console.log(`   ⚧️ Sexo: ${petSexo}`);
+                    console.log(`   📏 Porte ID: ${petIdPorte}`);
+                    console.log(`   🐶 Espécie ID: ${petIdEspecie}`);
+                    console.log(`   🐕 Raça ID: ${petIdRaca}`);
+                    console.log(`   📝 Observações: ${petObservacoes}`);
+
+                    // Inserir pet diretamente
+                    const petQuery = `
+                        INSERT INTO Pet 
+                        (idusuario, idporte, idespecie, idraca, nome, sexo, observacoes) 
+                        VALUES ($1, $2, $3, $4, $5, $6, $7) 
+                        RETURNING idpet, nome, sexo, idporte, idespecie, idraca, observacoes
+                    `;
+
+                    const petResult = await client.query(petQuery, [
+                        idUsuario,
+                        petIdPorte,
+                        petIdEspecie,
+                        petIdRaca,
+                        petNome,
+                        petSexo,
+                        petObservacoes
+                    ]);
+
+                    petCriado = petResult.rows[0];
+                    console.log('✅ Pet criado com sucesso:', {
+                        idPet: petCriado.idpet,
+                        nome: petCriado.nome,
+                        sexo: petCriado.sexo
+                    });
+
+                    // Adiciona info do pet na resposta
+                    novoUsuario.petCriado = {
+                        idPet: petCriado.idpet,
+                        nome: petCriado.nome,
+                        sexo: petCriado.sexo,
+                        idPorte: petCriado.idporte,
+                        idEspecie: petCriado.idespecie,
+                        idRaca: petCriado.idraca
+                    };
+                }
+            } catch (petError) {
+                console.error('❌ Erro ao criar pet:', petError);
+                
+                // Se for erro de chave estrangeira, tenta criar sem as FKs
+                if (petError.code === '23503') {
+                    console.log('🔄 Tentando criar pet sem FKs devido a erro de chave estrangeira...');
+                    
+                    try {
+                        const petNome = petData.nome.trim();
+                        const petSexo = petData.sexo.trim().toUpperCase();
+                        const petObservacoes = petData.observacoes ? petData.observacoes.trim() : null;
+
+                        const petQuery = `
+                            INSERT INTO Pet 
+                            (idusuario, nome, sexo, observacoes) 
+                            VALUES ($1, $2, $3, $4) 
+                            RETURNING idpet, nome, sexo, observacoes
+                        `;
+
+                        const petResult = await client.query(petQuery, [
+                            idUsuario,
+                            petNome,
+                            petSexo,
+                            petObservacoes
+                        ]);
+
+                        petCriado = petResult.rows[0];
+                        console.log('✅ Pet criado (sem FKs) com sucesso:', petCriado);
+
+                        novoUsuario.petCriado = {
+                            idPet: petCriado.idpet,
+                            nome: petCriado.nome,
+                            sexo: petCriado.sexo
+                        };
+                    } catch (secondError) {
+                        console.error('❌ Erro também na segunda tentativa:', secondError);
+                        // Ainda assim não fazemos rollback - usuário foi criado
+                    }
+                } else {
+                    // Para outros erros, apenas log e continua
+                    console.error('❌ Erro não tratado ao criar pet, continuando com usuário...');
+                }
             }
-        } catch (petError) {
-            console.error('❌ Erro ao criar pet:', petError);
-            // Não fazemos rollback aqui - o usuário foi criado, só o pet que falhou
+        } else {
+            console.log('ℹ️ Nenhum dado de pet fornecido');
         }
 
         // Commit da transação
