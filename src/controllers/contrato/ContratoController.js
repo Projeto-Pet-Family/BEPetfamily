@@ -1,20 +1,6 @@
 const pool = require('../../connections/SQLConnections.js');
 
-// Funções auxiliares
-function formatarEndereco(contrato) {
-    const enderecoParts = [];
-    
-    if (contrato.logradouro_nome) enderecoParts.push(contrato.logradouro_nome);
-    if (contrato.endereco_numero) enderecoParts.push(contrato.endereco_numero.toString());
-    if (contrato.endereco_complemento) enderecoParts.push(contrato.endereco_complemento);
-    if (contrato.bairro_nome) enderecoParts.push(contrato.bairro_nome);
-    if (contrato.cidade_nome) enderecoParts.push(contrato.cidade_nome);
-    if (contrato.estado_sigla) enderecoParts.push(contrato.estado_sigla);
-    if (contrato.cep_codigo) enderecoParts.push(`CEP: ${contrato.cep_codigo}`);
-    
-    return enderecoParts.join(', ');
-}
-
+// Configurações
 const statusValidos = ['em_aprovacao', 'aprovado', 'em_execucao', 'concluido', 'negado', 'cancelado'];
 const statusMap = {
     'em_aprovacao': 'Em aprovação',
@@ -24,16 +10,87 @@ const statusMap = {
     'negado': 'Negado',
     'cancelado': 'Cancelado'
 };
+const statusNaoEditaveis = ['concluido', 'cancelado', 'negado'];
 
-// Função principal para buscar contrato com relacionamentos
-async function buscarContratoComRelacionamentos(client, idContrato) {
+// Funções auxiliares
+const formatarEndereco = (contrato) => {
+    const enderecoParts = [];
+    if (contrato.logradouro_nome) enderecoParts.push(contrato.logradouro_nome);
+    if (contrato.endereco_numero) enderecoParts.push(contrato.endereco_numero.toString());
+    if (contrato.endereco_complemento) enderecoParts.push(contrato.endereco_complemento);
+    if (contrato.bairro_nome) enderecoParts.push(contrato.bairro_nome);
+    if (contrato.cidade_nome) enderecoParts.push(contrato.cidade_nome);
+    if (contrato.estado_sigla) enderecoParts.push(contrato.estado_sigla);
+    if (contrato.cep_codigo) enderecoParts.push(`CEP: ${contrato.cep_codigo}`);
+    return enderecoParts.join(', ');
+};
+
+const validarStatus = (status) => statusValidos.includes(status);
+
+const validarDatas = (dataInicio, dataFim) => {
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    if (dataInicio && new Date(dataInicio) < hoje) {
+        throw new Error('Data início não pode ser anterior à data atual');
+    }
+    if (dataFim && dataInicio && new Date(dataFim) < new Date(dataInicio)) {
+        throw new Error('Data fim não pode ser anterior à data início');
+    }
+};
+
+const construirQueryUpdate = (campos, idContrato) => {
+    const updateFields = [], values = [];
+    Object.entries(campos).forEach(([key, value], i) => {
+        if (value !== undefined) {
+            updateFields.push(`${key} = $${i + 1}`);
+            values.push(value);
+        }
+    });
+    if (updateFields.length === 0) throw new Error('Nenhum campo válido para atualização');
+    values.push(idContrato);
+    updateFields.push('dataatualizacao = CURRENT_TIMESTAMP');
+    return {
+        query: `UPDATE contrato SET ${updateFields.join(', ')} WHERE idcontrato = $${values.length} RETURNING *`,
+        values
+    };
+};
+
+// Cálculos de valores
+const calcularValoresContrato = (contrato, pets = [], servicos = []) => {
+    const valorDiaria = parseFloat(contrato.valor_diaria || 0);
+    const quantidadeDias = contrato.duracao_dias || 1;
+    const quantidadePets = pets.length;
+    
+    const valorTotalHospedagem = valorDiaria * quantidadeDias * quantidadePets;
+    const totalServicos = servicos.reduce((total, s) => total + (parseFloat(s.subtotal) || 0), 0);
+    
+    const formatar = (valor) => `R$ ${valor.toFixed(2).replace('.', ',')}`;
+    
+    return {
+        valor_diaria: valorDiaria,
+        quantidade_dias: quantidadeDias,
+        quantidade_pets: quantidadePets,
+        valor_total_hospedagem: valorTotalHospedagem,
+        valor_total_servicos: totalServicos,
+        valor_total_contrato: valorTotalHospedagem + totalServicos,
+        formatado: {
+            valorDiaria: formatar(valorDiaria),
+            valorTotalHospedagem: formatar(valorTotalHospedagem),
+            valorTotalServicos: formatar(totalServicos),
+            valorTotalContrato: formatar(valorTotalHospedagem + totalServicos),
+            periodo: `${quantidadeDias} dia(s)`,
+            pets: `${quantidadePets} pet(s)`
+        }
+    };
+};
+
+// Busca completa de contrato
+const buscarContratoComRelacionamentos = async (client, idContrato) => {
     try {
-        const contratoQuery = `
+        const query = `
             SELECT c.*, h.nome as hospedagem_nome, h.valor_diaria,
-                   e.idendereco, e.numero as endereco_numero,
-                   e.complemento as endereco_complemento, l.nome as logradouro_nome,
-                   b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
-                   es.sigla as estado_sigla, cep.codigo as cep_codigo,
+                   e.idendereco, e.numero as endereco_numero, e.complemento as endereco_complemento,
+                   l.nome as logradouro_nome, b.nome as bairro_nome, ci.nome as cidade_nome,
+                   es.nome as estado_nome, es.sigla as estado_sigla, cep.codigo as cep_codigo,
                    u.nome as usuario_nome, u.email as usuario_email
             FROM contrato c
             LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
@@ -44,47 +101,24 @@ async function buscarContratoComRelacionamentos(client, idContrato) {
             LEFT JOIN estado es ON ci.idestado = es.idestado
             LEFT JOIN cep ON e.idcep = cep.idcep
             LEFT JOIN usuario u ON c.idusuario = u.idusuario
-            WHERE c.idcontrato = $1
-        `;
+            WHERE c.idcontrato = $1`;
         
-        const contratoResult = await client.query(contratoQuery, [idContrato]);
-        const contrato = contratoResult.rows[0];
-        if (!contrato) return null;
+        const contratoResult = await client.query(query, [idContrato]);
+        if (!contratoResult.rows[0]) return null;
 
-        // Formatar endereço
+        const contrato = contratoResult.rows[0];
         contrato.hospedagem_endereco = formatarEndereco(contrato);
 
-        // Buscar pets do contrato
-        const petsResult = await client.query(
-            `SELECT cp.idcontrato_pet, p.idpet, p.nome, p.sexo, p.nascimento, 
-                    p.idraca, p.idporte, p.idespecie
-             FROM contrato_pet cp 
-             JOIN pet p ON cp.idpet = p.idpet 
-             WHERE cp.idcontrato = $1`,
-            [idContrato]
-        );
-        contrato.pets = petsResult.rows;
+        const [petsResult, servicosResult] = await Promise.all([
+            client.query(`SELECT cp.idcontrato_pet, p.* FROM contrato_pet cp JOIN pet p ON cp.idpet = p.idpet WHERE cp.idcontrato = $1`, [idContrato]),
+            client.query(`SELECT cs.*, s.descricao, s.preco as preco_atual, (cs.quantidade * cs.preco_unitario) as subtotal 
+                         FROM contratoservico cs JOIN servico s ON cs.idservico = s.idservico 
+                         WHERE cs.idcontrato = $1 ORDER BY s.descricao`, [idContrato])
+        ]);
 
-        // Buscar serviços do contrato
-        const servicosResult = await client.query(
-            `SELECT cs.idcontratoservico, cs.idservico, cs.quantidade, cs.preco_unitario,
-                    s.descricao, s.preco as preco_atual,
-                    (cs.quantidade * cs.preco_unitario) as subtotal
-             FROM contratoservico cs
-             JOIN servico s ON cs.idservico = s.idservico
-             WHERE cs.idcontrato = $1 
-             ORDER BY s.descricao`,
-            [idContrato]
-        );
+        contrato.pets = petsResult.rows;
         contrato.servicos = servicosResult.rows;
 
-        // Calcular totais e informações adicionais
-        contrato.total_servicos = contrato.servicos.reduce((total, servico) => 
-            total + parseFloat(servico.subtotal || 0), 0
-        );
-        contrato.status_descricao = statusMap[contrato.status] || 'Desconhecido';
-
-        // Calcular duração em dias
         if (contrato.datainicio && contrato.datafim) {
             const diffTime = Math.abs(new Date(contrato.datafim) - new Date(contrato.datainicio));
             contrato.duracao_dias = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -92,90 +126,26 @@ async function buscarContratoComRelacionamentos(client, idContrato) {
             contrato.duracao_dias = null;
         }
 
-        // Calcular valores baseados na diária
-        let valorTotalHospedagem = 0;
-        let quantidadeDias = contrato.duracao_dias || 1;
-        let valorDiaria = contrato.valor_diaria ? parseFloat(contrato.valor_diaria) : 0;
-
-        valorTotalHospedagem = valorDiaria * quantidadeDias;
-
-        // Adicionar campos de cálculo ao contrato
-        contrato.calculo_valores = {
-            valor_diaria: valorDiaria,
-            quantidade_dias: quantidadeDias,
-            valor_total_hospedagem: valorTotalHospedagem,
-            valor_total_servicos: contrato.total_servicos || 0,
-            valor_total_contrato: valorTotalHospedagem + (contrato.total_servicos || 0),
-            valor_diaria_formatado: `R$ ${valorDiaria.toFixed(2).replace('.', ',')}`,
-            valor_total_hospedagem_formatado: `R$ ${valorTotalHospedagem.toFixed(2).replace('.', ',')}`,
-            valor_total_servicos_formatado: `R$ ${(contrato.total_servicos || 0).toFixed(2).replace('.', ',')}`,
-            valor_total_contrato_formatado: `R$ ${(valorTotalHospedagem + (contrato.total_servicos || 0)).toFixed(2).replace('.', ',')}`,
-            periodo_dias: `${quantidadeDias} dia(s)`
-        };
+        contrato.calculo_valores = calcularValoresContrato(contrato, contrato.pets, contrato.servicos);
+        contrato.status_descricao = statusMap[contrato.status] || 'Desconhecido';
 
         return contrato;
     } catch (error) {
         console.error('Erro ao buscar contrato com relacionamentos:', error);
         throw error;
     }
-}
-
-// Funções de validação
-function validarStatus(status) {
-    return statusValidos.includes(status);
-}
-
-function validarDatas(dataInicio, dataFim) {
-    const hoje = new Date();
-    hoje.setHours(0, 0, 0, 0);
-    
-    if (dataInicio && new Date(dataInicio) < hoje) {
-        throw new Error('Data início não pode ser anterior à data atual');
-    }
-    
-    if (dataFim && dataInicio && new Date(dataFim) < new Date(dataInicio)) {
-        throw new Error('Data fim não pode ser anterior à data início');
-    }
-}
-
-// Função para construir query de update dinâmica
-function construirQueryUpdate(campos, idContrato) {
-    const updateFields = [];
-    const values = [];
-    let paramCount = 1;
-
-    Object.entries(campos).forEach(([key, value]) => {
-        if (value !== undefined) {
-            updateFields.push(`${key} = $${paramCount}`);
-            values.push(value);
-            paramCount++;
-        }
-    });
-
-    if (updateFields.length === 0) {
-        throw new Error('Nenhum campo válido para atualização fornecido');
-    }
-
-    values.push(idContrato);
-    updateFields.push('dataatualizacao = CURRENT_TIMESTAMP');
-
-    return {
-        query: `UPDATE contrato SET ${updateFields.join(', ')} WHERE idcontrato = $${paramCount} RETURNING *`,
-        values
-    };
-}
+};
 
 // Controladores principais
-async function lerContratos(req, res) {
+const lerContratos = async (req, res) => {
     let client;
     try {
         client = await pool.connect();
         const query = `
             SELECT c.*, h.nome as hospedagem_nome, h.valor_diaria,
-                   e.numero as endereco_numero, e.complemento as endereco_complemento, 
-                   l.nome as logradouro_nome, b.nome as bairro_nome, 
-                   ci.nome as cidade_nome, es.nome as estado_nome,
-                   es.sigla as estado_sigla, cep.codigo as cep_codigo, 
+                   e.numero as endereco_numero, e.complemento as endereco_complemento,
+                   l.nome as logradouro_nome, b.nome as bairro_nome, ci.nome as cidade_nome,
+                   es.nome as estado_nome, es.sigla as estado_sigla, cep.codigo as cep_codigo,
                    u.nome as usuario_nome
             FROM contrato c
             LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
@@ -186,49 +156,32 @@ async function lerContratos(req, res) {
             LEFT JOIN estado es ON ci.idestado = es.idestado
             LEFT JOIN cep ON e.idcep = cep.idcep
             LEFT JOIN usuario u ON c.idusuario = u.idusuario
-            ORDER BY c.datacriacao DESC
-        `;
+            ORDER BY c.datacriacao DESC`;
         
         const result = await client.query(query);
-        
-        // Processar cada contrato para incluir pets, serviços e calcular valores
         const contratosCompletos = await Promise.all(
-            result.rows.map(async (contrato) => {
-                // Buscar informações completas do contrato (incluindo pets e serviços)
-                const contratoCompleto = await buscarContratoComRelacionamentos(client, contrato.idcontrato);
-                
-                return contratoCompleto;
-            })
+            result.rows.map(contrato => buscarContratoComRelacionamentos(client, contrato.idcontrato))
         );
-
         res.status(200).json(contratosCompletos);
     } catch (error) {
         console.error('Erro ao listar contratos:', error);
         res.status(500).json({ message: 'Erro ao listar contratos', error: error.message });
-    } finally {
-        if (client) await client.release();
-    }
-}
+    } finally { if (client) client.release(); }
+};
 
-async function buscarContratoPorId(req, res) {
+const buscarContratoPorId = async (req, res) => {
     let client;
     try {
         client = await pool.connect();
         const contratoCompleto = await buscarContratoComRelacionamentos(client, req.params.idContrato);
-        
-        if (!contratoCompleto) {
-            return res.status(404).json({ message: 'Contrato não encontrado' });
-        }
-
+        if (!contratoCompleto) return res.status(404).json({ message: 'Contrato não encontrado' });
         res.status(200).json(contratoCompleto);
     } catch (error) {
         res.status(500).json({ message: 'Erro ao buscar contrato', error: error.message });
-    } finally {
-        if (client) await client.release();
-    }
-}
+    } finally { if (client) client.release(); }
+};
 
-async function criarContrato(req, res) {
+const criarContrato = async (req, res) => {
     let client;
     try {
         client = await pool.connect();
@@ -237,114 +190,111 @@ async function criarContrato(req, res) {
 
         const { idHospedagem, idUsuario, status = 'em_aprovacao', dataInicio, dataFim, pets = [], servicos = [] } = req.body;
 
-        // Validações
         if (!idHospedagem || !idUsuario || !dataInicio) {
             await client.query('ROLLBACK');
             return res.status(400).json({ message: 'idHospedagem, idUsuario e dataInicio são obrigatórios' });
         }
-
         if (!validarStatus(status)) {
             await client.query('ROLLBACK');
             return res.status(400).json({ message: 'Status inválido' });
         }
-
         validarDatas(dataInicio, dataFim);
 
-        // Verificações em paralelo
         const [hospedagem, usuario, petsValidos, servicosValidos, contratoIdentico] = await Promise.all([
-            client.query('SELECT idhospedagem FROM hospedagem WHERE idhospedagem = $1', [idHospedagem]),
+            client.query('SELECT idhospedagem, valor_diaria FROM hospedagem WHERE idhospedagem = $1', [idHospedagem]),
             client.query('SELECT idusuario FROM usuario WHERE idusuario = $1', [idUsuario]),
             pets.length > 0 ? client.query('SELECT idpet FROM pet WHERE idpet = ANY($1) AND idusuario = $2', [pets, idUsuario]) : { rows: [] },
-            servicos.length > 0 ? client.query('SELECT idservico FROM servico WHERE idservico = ANY($1) AND idhospedagem = $2 AND ativo = true', [servicos.map(s => s.idservico), idHospedagem]) : { rows: [] },
-            client.query(
-                `SELECT idcontrato FROM contrato 
-                 WHERE idhospedagem = $1 
-                 AND idusuario = $2 
-                 AND datainicio = $3 
-                 AND COALESCE(datafim, $4) = COALESCE($4, datafim)
-                 AND status IN ('em_aprovacao', 'aprovado', 'em_execucao') 
-                 LIMIT 1`,
-                [idHospedagem, idUsuario, dataInicio, dataFim]
-            )
+            servicos.length > 0 ? client.query('SELECT idservico, preco FROM servico WHERE idservico = ANY($1) AND idhospedagem = $2 AND ativo = true', [servicos.map(s => s.idservico), idHospedagem]) : { rows: [] },
+            client.query(`SELECT idcontrato FROM contrato WHERE idhospedagem = $1 AND idusuario = $2 AND datainicio = $3 
+                         AND COALESCE(datafim, $4) = COALESCE($4, datafim) AND status IN ('em_aprovacao', 'aprovado', 'em_execucao') LIMIT 1`,
+                [idHospedagem, idUsuario, dataInicio, dataFim])
         ]);
 
-        // Validações de existência
         if (hospedagem.rows.length === 0) throw new Error('Hospedagem não encontrada');
         if (usuario.rows.length === 0) throw new Error('Usuário não encontrado');
         if (pets.length > 0 && petsValidos.rows.length !== pets.length) throw new Error('Um ou mais pets não pertencem ao usuário');
-        
-        if (servicos.length > 0 && servicosValidos.rows.length !== servicos.length) {
-            throw new Error('Um ou mais serviços não estão disponíveis para esta hospedagem');
-        }
-        
-        // Apenas impedir contrato IDÊNTICO
-        if (contratoIdentico.rows.length > 0) {
-            throw new Error('Já existe um contrato idêntico ativo para este usuário e hospedagem com as mesmas datas');
-        }
+        if (servicos.length > 0 && servicosValidos.rows.length !== servicos.length) throw new Error('Um ou mais serviços não estão disponíveis');
+        if (contratoIdentico.rows.length > 0) throw new Error('Já existe um contrato idêntico ativo');
 
-        // Inserir contrato
         const contratoResult = await client.query(
             'INSERT INTO contrato (idhospedagem, idusuario, status, datainicio, datafim) VALUES ($1, $2, $3, $4, $5) RETURNING idcontrato',
             [idHospedagem, idUsuario, status, dataInicio, dataFim]
         );
-
         const idContrato = contratoResult.rows[0].idcontrato;
 
-        // Inserir pets em lote (se fornecidos)
         if (pets.length > 0) {
             const petsValues = pets.map(idPet => `(${idContrato}, ${idPet})`).join(',');
             await client.query(`INSERT INTO contrato_pet (idcontrato, idpet) VALUES ${petsValues}`);
         }
 
-        // Inserir serviços em lote (se fornecidos)
         if (servicos.length > 0) {
-            const servicosIds = servicos.map(s => s.idservico);
-            const precosResult = await client.query('SELECT idservico, preco FROM servico WHERE idservico = ANY($1)', [servicosIds]);
-            const precoMap = Object.fromEntries(precosResult.rows.map(row => [row.idservico, row.preco]));
-            
             const servicosValues = servicos.map(servico => {
-                const precoUnitario = precoMap[servico.idservico];
+                const precoUnitario = servicosValidos.rows.find(s => s.idservico === servico.idservico)?.preco || 0;
                 const quantidade = servico.quantidade || 1;
                 return `(${idContrato}, ${servico.idservico}, ${quantidade}, ${precoUnitario})`;
             }).join(',');
-            
             await client.query(`INSERT INTO contratoservico (idcontrato, idservico, quantidade, preco_unitario) VALUES ${servicosValues}`);
         }
 
         await client.query('COMMIT');
         const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
-
         res.status(201).json({ message: 'Contrato criado com sucesso', data: contratoCompleto });
     } catch (error) {
         if (client) await client.query('ROLLBACK');
         const statusCode = error.message.includes('timeout') ? 408 : 500;
         res.status(statusCode).json({ message: 'Erro ao criar contrato', error: error.message });
-    } finally {
-        if (client) await client.release();
-    }
-}
+    } finally { if (client) client.release(); }
+};
 
-async function atualizarContrato(req, res) {
+const atualizarContrato = async (req, res) => {
     let client;
     try {
         client = await pool.connect();
         const { idContrato } = req.params;
         const { idHospedagem, idUsuario, status, dataInicio, dataFim } = req.body;
 
-        // Verificar se contrato existe
-        const contratoExistente = await client.query('SELECT * FROM contrato WHERE idcontrato = $1', [idContrato]);
+        const contratoExistente = await client.query(
+            'SELECT * FROM contrato WHERE idcontrato = $1',
+            [idContrato]
+        );
         if (contratoExistente.rows.length === 0) {
             return res.status(404).json({ message: 'Contrato não encontrado' });
         }
 
-        // Validações
         if (status && !validarStatus(status)) {
             return res.status(400).json({ message: 'Status inválido' });
         }
 
         validarDatas(dataInicio, dataFim);
 
-        // Construir e executar query
+        const contratoAtual = contratoExistente.rows[0];
+        if (statusNaoEditaveis.includes(contratoAtual.status)) {
+            return res.status(400).json({ 
+                message: `Não é possível atualizar um contrato com status "${statusMap[contratoAtual.status]}"`,
+                error: 'STATUS_NAO_EDITAVEL'
+            });
+        }
+
+        if (idHospedagem) {
+            const hospedagem = await client.query(
+                'SELECT idhospedagem FROM hospedagem WHERE idhospedagem = $1',
+                [idHospedagem]
+            );
+            if (hospedagem.rows.length === 0) {
+                return res.status(400).json({ message: 'Hospedagem não encontrada' });
+            }
+        }
+
+        if (idUsuario) {
+            const usuario = await client.query(
+                'SELECT idusuario FROM usuario WHERE idusuario = $1',
+                [idUsuario]
+            );
+            if (usuario.rows.length === 0) {
+                return res.status(400).json({ message: 'Usuário não encontrado' });
+            }
+        }
+
         const { query, values } = construirQueryUpdate({
             idhospedagem: idHospedagem,
             idusuario: idUsuario,
@@ -356,63 +306,369 @@ async function atualizarContrato(req, res) {
         await client.query(query, values);
         const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
 
-        res.status(200).json({ message: 'Contrato atualizado com sucesso', data: contratoCompleto });
+        res.status(200).json({
+            message: 'Contrato atualizado com sucesso',
+            data: contratoCompleto,
+            alteracoes: {
+                idHospedagem: idHospedagem !== undefined,
+                idUsuario: idUsuario !== undefined,
+                status: status !== undefined,
+                dataInicio: dataInicio !== undefined,
+                dataFim: dataFim !== undefined
+            }
+        });
     } catch (error) {
-        res.status(500).json({ message: 'Erro ao atualizar contrato', error: error.message });
+        res.status(500).json({ 
+            message: 'Erro ao atualizar contrato', 
+            error: error.message,
+            errorCode: error.code 
+        });
     } finally {
         if (client) await client.release();
     }
-}
+};
 
-async function atualizarDatasContrato(req, res) {
+const excluirContrato = async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idContrato } = req.params;
+
+        const contratoExistente = await client.query(
+            'SELECT * FROM contrato WHERE idcontrato = $1',
+            [idContrato]
+        );
+        if (contratoExistente.rows.length === 0) {
+            return res.status(404).json({ message: 'Contrato não encontrado' });
+        }
+
+        const contrato = contratoExistente.rows[0];
+        const statusBloqueadosExclusao = ['em_execucao', 'concluido'];
+        if (statusBloqueadosExclusao.includes(contrato.status)) {
+            return res.status(400).json({ 
+                message: `Não é possível excluir um contrato com status "${statusMap[contrato.status]}"`,
+                statusAtual: contrato.status,
+                descricaoStatus: statusMap[contrato.status],
+                erro: 'EXCLUSAO_BLOQUEADA'
+            });
+        }
+
+        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
+        await client.query('BEGIN');
+
+        await client.query('DELETE FROM contratoservico WHERE idcontrato = $1', [idContrato]);
+        await client.query('DELETE FROM contrato_pet WHERE idcontrato = $1', [idContrato]);
+        
+        const deleteResult = await client.query(
+            'DELETE FROM contrato WHERE idcontrato = $1 RETURNING *',
+            [idContrato]
+        );
+
+        await client.query('COMMIT');
+
+        res.status(200).json({
+            message: 'Contrato excluído com sucesso',
+            data: contratoCompleto,
+            exclusao: {
+                contratoExcluido: deleteResult.rows[0],
+                servicosRemovidos: contratoCompleto.servicos?.length || 0,
+                petsRemovidos: contratoCompleto.pets?.length || 0,
+                valorTotalPerdido: contratoCompleto.calculo_valores?.valor_total_contrato || 0
+            }
+        });
+    } catch (error) {
+        if (client) await client.query('ROLLBACK');
+        
+        const statusCode = error.code === '23503' ? 400 : 500;
+        const message = error.code === '23503' 
+            ? 'Não é possível excluir o contrato pois está sendo utilizado em outros registros'
+            : 'Erro ao excluir contrato';
+        
+        res.status(statusCode).json({ 
+            message, 
+            error: error.message,
+            errorCode: error.code,
+            errorDetail: error.detail 
+        });
+    } finally {
+        if (client) await client.release();
+    }
+};
+
+const buscarContratosPorUsuario = async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idUsuario } = req.params;
+        
+        const usuario = await client.query(
+            'SELECT idusuario FROM usuario WHERE idusuario = $1',
+            [idUsuario]
+        );
+        if (usuario.rows.length === 0) {
+            return res.status(404).json({ message: 'Usuário não encontrado' });
+        }
+
+        const query = `
+            SELECT c.*, h.nome as hospedagem_nome, e.numero as endereco_numero,
+                   e.complemento as endereco_complemento, l.nome as logradouro_nome,
+                   b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
+                   es.sigla as estado_sigla, cep.codigo as cep_codigo
+            FROM contrato c
+            LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+            LEFT JOIN endereco e ON h.idendereco = e.idendereco
+            LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
+            LEFT JOIN bairro b ON l.idbairro = b.idbairro
+            LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
+            LEFT JOIN estado es ON ci.idestado = es.idestado
+            LEFT JOIN cep ON e.idcep = cep.idcep
+            WHERE c.idusuario = $1
+            ORDER BY 
+                CASE 
+                    WHEN c.status = 'em_aprovacao' THEN 1
+                    WHEN c.status = 'aprovado' THEN 2
+                    WHEN c.status = 'em_execucao' THEN 3
+                    WHEN c.status = 'concluido' THEN 4
+                    WHEN c.status = 'negado' THEN 5
+                    WHEN c.status = 'cancelado' THEN 6
+                    ELSE 7
+                END,
+                c.datainicio DESC,
+                c.datacriacao DESC
+        `;
+
+        const result = await client.query(query, [idUsuario]);
+        
+        const contratosCompletos = await Promise.all(
+            result.rows.map(async (contrato) => {
+                const contratoComEndereco = {
+                    ...contrato,
+                    hospedagem_endereco: formatarEndereco(contrato)
+                };
+                return await buscarContratoComRelacionamentos(client, contrato.idcontrato);
+            })
+        );
+
+        const estatisticas = {
+            total_contratos: contratosCompletos.length,
+            por_status: contratosCompletos.reduce((acc, contrato) => {
+                acc[contrato.status] = (acc[contrato.status] || 0) + 1;
+                return acc;
+            }, {}),
+            valor_total: contratosCompletos.reduce((total, contrato) => 
+                total + (contrato.calculo_valores?.valor_total_contrato || 0), 0
+            ),
+            pets_total: contratosCompletos.reduce((total, contrato) => 
+                total + (contrato.pets?.length || 0), 0
+            )
+        };
+
+        res.status(200).json({
+            contratos: contratosCompletos,
+            estatisticas: estatisticas,
+            usuario: {
+                id: idUsuario,
+                total_contratos: estatisticas.total_contratos
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ 
+            message: 'Erro ao buscar contratos do usuário', 
+            error: error.message 
+        });
+    } finally {
+        if (client) await client.release();
+    }
+};
+
+const adicionarServicoContrato = async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const { idContrato } = req.params;
+        const { servicos } = req.body;
+
+        if (!servicos || !Array.isArray(servicos) || servicos.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: 'Lista de serviços é obrigatória' });
+        }
+
+        const contrato = await client.query(
+            'SELECT c.*, h.valor_diaria FROM contrato c JOIN hospedagem h ON c.idhospedagem = h.idhospedagem WHERE c.idcontrato = $1',
+            [idContrato]
+        );
+        if (contrato.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Contrato não encontrado' });
+        }
+
+        if (statusNaoEditaveis.includes(contrato.rows[0].status)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ 
+                message: `Não é possível adicionar serviços a um contrato com status "${statusMap[contrato.rows[0].status]}"`
+            });
+        }
+
+        const servicosIds = servicos.map(s => s.idservico);
+        const servicosValidos = await client.query(
+            'SELECT idservico, preco FROM servico WHERE idservico = ANY($1) AND idhospedagem = $2 AND ativo = true',
+            [servicosIds, contrato.rows[0].idhospedagem]
+        );
+
+        if (servicosValidos.rows.length !== servicos.length) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: 'Um ou mais serviços não estão disponíveis para esta hospedagem' });
+        }
+
+        const servicosInseridos = [];
+        for (const servico of servicos) {
+            const precoUnitario = servicosValidos.rows.find(s => s.idservico === servico.idservico).preco;
+            const quantidade = servico.quantidade || 1;
+            
+            const result = await client.query(
+                'INSERT INTO contratoservico (idcontrato, idservico, quantidade, preco_unitario) VALUES ($1, $2, $3, $4) RETURNING *',
+                [idContrato, servico.idservico, quantidade, precoUnitario]
+            );
+            servicosInseridos.push(result.rows[0]);
+        }
+
+        await client.query('COMMIT');
+        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
+        
+        res.status(200).json({
+            message: 'Serviço(s) adicionado(s) com sucesso',
+            servicosAdicionados: servicosInseridos,
+            data: contratoCompleto,
+            atualizacao_valores: {
+                valor_servicos_adicional: servicosInseridos.reduce((sum, s) => sum + (s.preco_unitario * s.quantidade), 0),
+                valor_total_atualizado: contratoCompleto.calculo_valores.valor_total_contrato
+            }
+        });
+    } catch (error) {
+        if (client) await client.query('ROLLBACK');
+        res.status(500).json({ message: 'Erro ao adicionar serviço ao contrato', error: error.message });
+    } finally { if (client) client.release(); }
+};
+
+const adicionarPetContrato = async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const { idContrato } = req.params;
+        const { pets } = req.body;
+
+        if (!pets || !Array.isArray(pets) || pets.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: 'Lista de pets é obrigatória' });
+        }
+
+        const contrato = await client.query(
+            'SELECT c.*, h.valor_diaria FROM contrato c JOIN hospedagem h ON c.idhospedagem = h.idhospedagem WHERE c.idcontrato = $1',
+            [idContrato]
+        );
+        if (contrato.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Contrato não encontrado' });
+        }
+
+        if (statusNaoEditaveis.includes(contrato.rows[0].status)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ 
+                message: `Não é possível adicionar pets a um contrato com status "${statusMap[contrato.rows[0].status]}"`
+            });
+        }
+
+        const petsValidos = await client.query(
+            'SELECT idpet FROM pet WHERE idpet = ANY($1) AND idusuario = $2',
+            [pets, contrato.rows[0].idusuario]
+        );
+
+        if (petsValidos.rows.length !== pets.length) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: 'Um ou mais pets não pertencem ao usuário do contrato' });
+        }
+
+        const petsInseridos = [];
+        for (const idPet of pets) {
+            const result = await client.query(
+                'INSERT INTO contrato_pet (idcontrato, idpet) VALUES ($1, $2) RETURNING *',
+                [idContrato, idPet]
+            );
+            petsInseridos.push(result.rows[0]);
+        }
+
+        await client.query('COMMIT');
+        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
+        
+        const valorDiaria = parseFloat(contrato.rows[0].valor_diaria || 0);
+        const duracaoDias = contratoCompleto.duracao_dias || 1;
+        const valorAdicionalPorPet = valorDiaria * duracaoDias;
+        const valorTotalAdicional = valorAdicionalPorPet * pets.length;
+
+        res.status(200).json({
+            message: 'Pet(s) adicionado(s) com sucesso',
+            petsAdicionados: petsInseridos,
+            data: contratoCompleto,
+            atualizacao_valores: {
+                valor_adicional_por_pet: valorAdicionalPorPet,
+                valor_total_adicional: valorTotalAdicional,
+                valor_total_atualizado: contratoCompleto.calculo_valores.valor_total_contrato
+            }
+        });
+    } catch (error) {
+        if (client) await client.query('ROLLBACK');
+        res.status(500).json({ message: 'Erro ao adicionar pet ao contrato', error: error.message });
+    } finally { if (client) client.release(); }
+};
+
+const atualizarDatasContrato = async (req, res) => {
     let client;
     try {
         client = await pool.connect();
         const { idContrato } = req.params;
         const { dataInicio, dataFim } = req.body;
 
-        // Verificar se pelo menos uma data foi fornecida
         if (dataInicio === undefined && dataFim === undefined) {
             return res.status(400).json({ message: 'Pelo menos uma data (dataInicio ou dataFim) deve ser fornecida' });
         }
 
-        // Verificar se contrato existe
-        const contratoExistente = await client.query('SELECT * FROM contrato WHERE idcontrato = $1', [idContrato]);
-        if (contratoExistente.rows.length === 0) {
+        const contratoResult = await client.query(
+            'SELECT c.*, h.valor_diaria FROM contrato c JOIN hospedagem h ON c.idhospedagem = h.idhospedagem WHERE c.idcontrato = $1',
+            [idContrato]
+        );
+        if (contratoResult.rows.length === 0) {
             return res.status(404).json({ message: 'Contrato não encontrado' });
         }
 
-        const contrato = contratoExistente.rows[0];
-
-        // Verificar se o contrato permite edição
-        const statusNaoEditaveis = ['concluido', 'cancelado', 'negado', 'em_execucao'];
+        const contrato = contratoResult.rows[0];
         if (statusNaoEditaveis.includes(contrato.status)) {
-            return res.status(400).json({ message: `Não é possível editar datas de um contrato com status "${contrato.status}"` });
+            return res.status(400).json({ 
+                message: `Não é possível editar datas de um contrato com status "${statusMap[contrato.status]}"` 
+            });
         }
 
-        // Validar datas
         validarDatas(dataInicio, dataFim);
 
-        // Verificar se existe outro contrato IDÊNTICO (apenas se ambas as datas forem fornecidas)
-        if (dataInicio !== undefined && dataFim !== undefined) {
-            const contratoIdentico = await client.query(
-                `SELECT idcontrato FROM contrato 
-                 WHERE idhospedagem = $1 
-                 AND idusuario = $2 
-                 AND idcontrato != $3
-                 AND datainicio = $4 
-                 AND COALESCE(datafim, $5) = COALESCE($5, datafim)
-                 AND status IN ('em_aprovacao', 'aprovado', 'em_execucao') 
-                 LIMIT 1`,
-                [contrato.idhospedagem, contrato.idusuario, idContrato, dataInicio, dataFim]
-            );
-
-            if (contratoIdentico.rows.length > 0) {
-                return res.status(400).json({ message: 'Já existe um contrato idêntico ativo para este usuário e hospedagem com as mesmas datas' });
-            }
+        const novaDataInicio = dataInicio || contrato.datainicio;
+        const novaDataFim = dataFim || contrato.datafim;
+        let novaDuracaoDias = 1;
+        
+        if (novaDataFim) {
+            const diffTime = Math.abs(new Date(novaDataFim) - new Date(novaDataInicio));
+            novaDuracaoDias = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
         }
 
-        // Atualizar datas
+        const valorDiaria = parseFloat(contrato.valor_diaria || 0);
+        const duracaoAtual = contrato.duracao_dias || 1;
+        const quantidadePetsResult = await client.query('SELECT COUNT(*) as total FROM contrato_pet WHERE idcontrato = $1', [idContrato]);
+        const quantidadePets = parseInt(quantidadePetsResult.rows[0].total) || 0;
+
+        const valorAtual = valorDiaria * duracaoAtual * quantidadePets;
+        const valorNovo = valorDiaria * novaDuracaoDias * quantidadePets;
+        const diferencaValor = valorNovo - valorAtual;
+
         const { query, values } = construirQueryUpdate({
             datainicio: dataInicio,
             datafim: dataFim
@@ -426,17 +682,189 @@ async function atualizarDatasContrato(req, res) {
             data: contratoCompleto,
             alteracoes: {
                 dataInicio: dataInicio !== undefined,
-                dataFim: dataFim !== undefined
+                dataFim: dataFim !== undefined,
+                duracao_anterior: duracaoAtual,
+                duracao_nova: novaDuracaoDias,
+                ajuste_valor: {
+                    valor_anterior_hospedagem: valorAtual,
+                    valor_novo_hospedagem: valorNovo,
+                    diferenca: diferencaValor,
+                    impacto: diferencaValor > 0 ? 'Aumento' : 'Redução'
+                }
             }
         });
     } catch (error) {
         res.status(500).json({ message: 'Erro ao atualizar datas do contrato', error: error.message });
+    } finally { if (client) client.release(); }
+};
+
+const excluirServicoContrato = async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idContrato, idServico } = req.params;
+
+        const contrato = await client.query('SELECT * FROM contrato WHERE idcontrato = $1', [idContrato]);
+        if (contrato.rows.length === 0) return res.status(404).json({ message: 'Contrato não encontrado' });
+
+        if (statusNaoEditaveis.includes(contrato.rows[0].status)) {
+            return res.status(400).json({ 
+                message: `Não é possível remover serviços de um contrato com status "${statusMap[contrato.rows[0].status]}"`
+            });
+        }
+
+        const servico = await client.query(
+            'SELECT cs.*, s.descricao FROM contratoservico cs JOIN servico s ON cs.idservico = s.idservico WHERE cs.idcontrato = $1 AND cs.idservico = $2',
+            [idContrato, idServico]
+        );
+        if (servico.rows.length === 0) return res.status(404).json({ message: 'Serviço não encontrado no contrato' });
+
+        const valorRemovido = servico.rows[0].quantidade * servico.rows[0].preco_unitario;
+
+        const deleteResult = await client.query(
+            'DELETE FROM contratoservico WHERE idcontrato = $1 AND idservico = $2 RETURNING *',
+            [idContrato, idServico]
+        );
+
+        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
+
+        res.status(200).json({
+            message: 'Serviço removido do contrato com sucesso',
+            servicoExcluido: { ...deleteResult.rows[0], descricao: servico.rows[0].descricao },
+            impacto_financeiro: {
+                valor_removido: valorRemovido,
+                valor_total_atualizado: contratoCompleto.calculo_valores.valor_total_contrato
+            },
+            data: contratoCompleto
+        });
+    } catch (error) {
+        const statusCode = error.code === '23503' ? 400 : 500;
+        const message = error.code === '23503' 
+            ? 'Não é possível excluir o serviço pois está vinculado a outros registros'
+            : 'Erro ao excluir serviço do contrato';
+        res.status(statusCode).json({ message, error: error.message });
+    } finally { if (client) client.release(); }
+};
+
+const excluirPetContrato = async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idContrato, idPet } = req.params;
+
+        const contrato = await client.query(
+            'SELECT c.*, h.valor_diaria FROM contrato c JOIN hospedagem h ON c.idhospedagem = h.idhospedagem WHERE c.idcontrato = $1',
+            [idContrato]
+        );
+        if (contrato.rows.length === 0) return res.status(404).json({ message: 'Contrato não encontrado' });
+
+        if (statusNaoEditaveis.includes(contrato.rows[0].status)) {
+            return res.status(400).json({ 
+                message: `Não é possível remover pets de um contrato com status "${statusMap[contrato.rows[0].status]}"` 
+            });
+        }
+
+        const petResult = await client.query(
+            'SELECT cp.*, p.nome FROM contrato_pet cp JOIN pet p ON cp.idpet = p.idpet WHERE cp.idcontrato = $1 AND cp.idpet = $2',
+            [idContrato, idPet]
+        );
+        if (petResult.rows.length === 0) return res.status(404).json({ message: 'Pet não encontrado no contrato' });
+
+        const petsCount = await client.query('SELECT COUNT(*) as total FROM contrato_pet WHERE idcontrato = $1', [idContrato]);
+        if (parseInt(petsCount.rows[0].total) <= 1) {
+            return res.status(400).json({ message: 'Não é possível remover o último pet do contrato' });
+        }
+
+        const valorDiaria = parseFloat(contrato.rows[0].valor_diaria || 0);
+        const duracaoDias = contrato.rows[0].duracao_dias || 1;
+        const valorRemovido = valorDiaria * duracaoDias;
+
+        const deleteResult = await client.query(
+            'DELETE FROM contrato_pet WHERE idcontrato = $1 AND idpet = $2 RETURNING *',
+            [idContrato, idPet]
+        );
+
+        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
+
+        res.status(200).json({
+            message: 'Pet removido do contrato com sucesso',
+            petExcluido: { ...deleteResult.rows[0], nome: petResult.rows[0].nome },
+            impacto_financeiro: {
+                valor_removido: valorRemovido,
+                valor_total_atualizado: contratoCompleto.calculo_valores.valor_total_contrato
+            },
+            data: contratoCompleto
+        });
+    } catch (error) {
+        const statusCode = error.code === '23503' ? 400 : 500;
+        const message = error.code === '23503' 
+            ? 'Não é possível excluir o pet pois está vinculado a outros registros'
+            : 'Erro ao excluir pet do contrato';
+        res.status(statusCode).json({ message, error: error.message });
+    } finally { if (client) client.release(); }
+};
+
+// MÉTODOS FALTANTES
+const buscarContratosPorUsuarioEStatus = async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idUsuario } = req.params;
+        const { status } = req.query;
+
+        if (!idUsuario) return res.status(400).json({ message: 'idUsuario é obrigatório' });
+
+        const usuario = await client.query('SELECT idusuario FROM usuario WHERE idusuario = $1', [idUsuario]);
+        if (usuario.rows.length === 0) return res.status(404).json({ message: 'Usuário não encontrado' });
+
+        let query = `
+            SELECT c.*, h.nome as hospedagem_nome, e.numero as endereco_numero,
+                   e.complemento as endereco_complemento, l.nome as logradouro_nome,
+                   b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
+                   es.sigla as estado_sigla, cep.codigo as cep_codigo
+            FROM contrato c
+            LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+            LEFT JOIN endereco e ON h.idendereco = e.idendereco
+            LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
+            LEFT JOIN bairro b ON l.idbairro = b.idbairro
+            LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
+            LEFT JOIN estado es ON ci.idestado = es.idestado
+            LEFT JOIN cep ON e.idcep = cep.idcep
+            WHERE c.idusuario = $1
+        `;
+
+        const values = [idUsuario];
+        if (status) {
+            if (!validarStatus(status)) {
+                return res.status(400).json({ message: 'Status inválido' });
+            }
+            query += ` AND c.status = $2`;
+            values.push(status);
+        }
+
+        query += ` ORDER BY c.datainicio DESC, c.datacriacao DESC`;
+
+        const result = await client.query(query, values);
+        
+        const contratosCompletos = await Promise.all(
+            result.rows.map(async (contrato) => {
+                const contratoComEndereco = {
+                    ...contrato,
+                    hospedagem_endereco: formatarEndereco(contrato)
+                };
+                return await buscarContratoComRelacionamentos(client, contrato.idcontrato);
+            })
+        );
+
+        res.status(200).json(contratosCompletos);
+    } catch (error) {
+        res.status(500).json({ message: 'Erro ao buscar contratos do usuário', error: error.message });
     } finally {
         if (client) await client.release();
     }
-}
+};
 
-async function atualizarStatusContrato(req, res) {
+const atualizarStatusContrato = async (req, res) => {
     let client;
     try {
         client = await pool.connect();
@@ -458,139 +886,18 @@ async function atualizarStatusContrato(req, res) {
         );
 
         const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
-        res.status(200).json({ message: 'Status do contrato atualizado com sucesso', data: contratoCompleto });
+        res.status(200).json({ 
+            message: 'Status do contrato atualizado com sucesso', 
+            data: contratoCompleto 
+        });
     } catch (error) {
         res.status(500).json({ message: 'Erro ao atualizar status do contrato', error: error.message });
     } finally {
         if (client) await client.release();
     }
-}
+};
 
-async function excluirContrato(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idContrato } = req.params;
-
-        const contratoExistente = await client.query('SELECT * FROM contrato WHERE idcontrato = $1', [idContrato]);
-        if (contratoExistente.rows.length === 0) {
-            return res.status(404).json({ message: 'Contrato não encontrado' });
-        }
-
-        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
-        await client.query('DELETE FROM contrato WHERE idcontrato = $1', [idContrato]);
-
-        res.status(200).json({ message: 'Contrato excluído com sucesso', data: contratoCompleto });
-    } catch (error) {
-        const message = error.code === '23503' 
-            ? 'Não é possível excluir o contrato pois está sendo utilizado em outros registros'
-            : 'Erro ao excluir contrato';
-        res.status(error.code === '23503' ? 400 : 500).json({ message, error: error.message });
-    } finally {
-        if (client) await client.release();
-    }
-}
-
-async function excluirServicoContrato(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idContrato, idServico } = req.params;
-
-        // Verificações de existência
-        const [contrato, servico] = await Promise.all([
-            client.query('SELECT * FROM contrato WHERE idcontrato = $1', [idContrato]),
-            client.query('SELECT cs.*, s.descricao FROM contratoservico cs JOIN servico s ON cs.idservico = s.idservico WHERE cs.idcontrato = $1 AND cs.idservico = $2', [idContrato, idServico])
-        ]);
-
-        if (contrato.rows.length === 0) return res.status(404).json({ message: 'Contrato não encontrado' });
-        if (servico.rows.length === 0) return res.status(404).json({ message: 'Serviço não encontrado no contrato' });
-
-        // Verificar se o contrato permite edição (status não editáveis)
-        const contratoAtual = contrato.rows[0];
-        const statusNaoEditaveis = ['concluido', 'cancelado', 'negado', 'em_execucao'];
-        if (statusNaoEditaveis.includes(contratoAtual.status)) {
-            return res.status(400).json({ 
-                message: `Não é possível editar serviços de um contrato com status "${statusMap[contratoAtual.status] || contratoAtual.status}"`,
-                error: 'STATUS_NAO_EDITAVEL'
-            });
-        }
-
-        const deleteResult = await client.query(
-            'DELETE FROM contratoservico WHERE idcontrato = $1 AND idservico = $2 RETURNING *',
-            [idContrato, idServico]
-        );
-
-        res.status(200).json({
-            message: 'Serviço removido do contrato com sucesso',
-            servicoExcluido: { ...deleteResult.rows[0], descricao: servico.rows[0].descricao },
-            success: true
-        });
-    } catch (error) {
-        const statusCode = error.code === '23503' ? 400 : 500;
-        const message = error.code === '23503' 
-            ? 'Não é possível excluir o serviço pois está vinculado a outros registros'
-            : 'Erro ao excluir serviço do contrato';
-        res.status(statusCode).json({ 
-            message, 
-            error: error.message, 
-            success: false 
-        });
-    } finally {
-        if (client) await client.release();
-    }
-}
-
-async function excluirPetContrato(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idContrato, idPet } = req.params;
-
-        // Verificações
-        const contratoResult = await client.query('SELECT * FROM contrato WHERE idcontrato = $1', [idContrato]);
-        if (contratoResult.rows.length === 0) return res.status(404).json({ message: 'Contrato não encontrado' });
-
-        const contrato = contratoResult.rows[0];
-        const statusNaoEditaveis = ['concluido', 'cancelado', 'negado'];
-        if (statusNaoEditaveis.includes(contrato.status)) {
-            return res.status(400).json({ message: `Não é possível editar pets de um contrato com status "${contrato.status}"` });
-        }
-
-        const petResult = await client.query(
-            'SELECT cp.*, p.nome FROM contrato_pet cp JOIN pet p ON cp.idpet = p.idpet WHERE cp.idcontrato = $1 AND cp.idpet = $2',
-            [idContrato, idPet]
-        );
-        if (petResult.rows.length === 0) return res.status(404).json({ message: 'Pet não encontrado no contrato' });
-
-        // Verificar se é o último pet
-        const petsCount = await client.query('SELECT COUNT(*) as total FROM contrato_pet WHERE idcontrato = $1', [idContrato]);
-        if (parseInt(petsCount.rows[0].total) <= 1) {
-            return res.status(400).json({ message: 'Não é possível remover o último pet do contrato' });
-        }
-
-        const deleteResult = await client.query(
-            'DELETE FROM contrato_pet WHERE idcontrato = $1 AND idpet = $2 RETURNING *',
-            [idContrato, idPet]
-        );
-
-        res.status(200).json({
-            message: 'Pet removido do contrato com sucesso',
-            petExcluido: { ...deleteResult.rows[0], nome: petResult.rows[0].nome },
-            success: true
-        });
-    } catch (error) {
-        const statusCode = error.code === '23503' ? 400 : 500;
-        const message = error.code === '23503' 
-            ? 'Não é possível excluir o pet pois está vinculado a outros registros'
-            : 'Erro ao excluir pet do contrato';
-        res.status(statusCode).json({ message, error: error.message, success: false });
-    } finally {
-        if (client) await client.release();
-    }
-}
-
-async function alterarStatusContrato(req, res) {
+const alterarStatusContrato = async (req, res) => {
     let client;
     try {
         client = await pool.connect();
@@ -599,7 +906,6 @@ async function alterarStatusContrato(req, res) {
         const { idContrato } = req.params;
         const { status, motivo } = req.body;
 
-        // Validações básicas
         if (!status) {
             await client.query('ROLLBACK');
             return res.status(400).json({ message: 'Status é obrigatório' });
@@ -610,7 +916,6 @@ async function alterarStatusContrato(req, res) {
             return res.status(400).json({ message: 'Status inválido' });
         }
 
-        // Buscar contrato atual
         const contratoResult = await client.query(
             'SELECT * FROM contrato WHERE idcontrato = $1',
             [idContrato]
@@ -624,7 +929,6 @@ async function alterarStatusContrato(req, res) {
         const contratoAtual = contratoResult.rows[0];
         const statusAtual = contratoAtual.status;
 
-        // Validar transições de status permitidas
         const transicoesPermitidas = {
             'em_aprovacao': ['aprovado', 'negado', 'cancelado'],
             'aprovado': ['em_execucao', 'cancelado'],
@@ -634,7 +938,6 @@ async function alterarStatusContrato(req, res) {
             'cancelado': []
         };
 
-        // Verificar se a transição é permitida
         const transicoes = transicoesPermitidas[statusAtual];
         if (!transicoes || !transicoes.includes(status)) {
             await client.query('ROLLBACK');
@@ -646,14 +949,10 @@ async function alterarStatusContrato(req, res) {
             });
         }
 
-        // Validações específicas por status
         switch (status) {
             case 'em_execucao':
-                // Verificar se a data de início já passou
-                const hoje = new Date();
-                hoje.setHours(0, 0, 0, 0);
-                const dataInicio = new Date(contratoAtual.datainicio);
-                dataInicio.setHours(0, 0, 0, 0);
+                const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+                const dataInicio = new Date(contratoAtual.datainicio); dataInicio.setHours(0, 0, 0, 0);
                 
                 if (dataInicio > hoje) {
                     await client.query('ROLLBACK');
@@ -664,12 +963,9 @@ async function alterarStatusContrato(req, res) {
                 break;
 
             case 'concluido':
-                // Verificar se a data de fim já passou (se existir)
                 if (contratoAtual.datafim) {
-                    const dataFim = new Date(contratoAtual.datafim);
-                    dataFim.setHours(0, 0, 0, 0);
-                    const hoje = new Date();
-                    hoje.setHours(0, 0, 0, 0);
+                    const dataFim = new Date(contratoAtual.datafim); dataFim.setHours(0, 0, 0, 0);
+                    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
                     
                     if (dataFim > hoje) {
                         await client.query('ROLLBACK');
@@ -681,7 +977,6 @@ async function alterarStatusContrato(req, res) {
                 break;
 
             case 'negado':
-                // Motivo é obrigatório para negar
                 if (!motivo || motivo.trim().length === 0) {
                     await client.query('ROLLBACK');
                     return res.status(400).json({ 
@@ -691,7 +986,6 @@ async function alterarStatusContrato(req, res) {
                 break;
         }
 
-        // Atualizar o status
         const updateQuery = `
             UPDATE contrato 
             SET status = $1, dataatualizacao = CURRENT_TIMESTAMP 
@@ -699,16 +993,14 @@ async function alterarStatusContrato(req, res) {
             RETURNING *
         `;
 
-        const updateResult = await client.query(updateQuery, [status, idContrato]);
+        await client.query(updateQuery, [status, idContrato]);
         
-        // Se necessário, registrar o motivo (para negados)
         if (status === 'negado' && motivo) {
             console.log(`Contrato ${idContrato} negado. Motivo: ${motivo}`);
         }
 
         await client.query('COMMIT');
 
-        // Buscar contrato completo atualizado
         const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
 
         res.status(200).json({
@@ -731,9 +1023,9 @@ async function alterarStatusContrato(req, res) {
     } finally {
         if (client) await client.release();
     }
-}
+};
 
-async function obterTransicoesStatus(req, res) {
+const obterTransicoesStatus = async (req, res) => {
     let client;
     try {
         const { idContrato } = req.params;
@@ -785,15 +1077,14 @@ async function obterTransicoesStatus(req, res) {
     } finally {
         if (client) await client.release();
     }
-}
+};
 
-async function calcularValorContrato(req, res) {
+const calcularValorContrato = async (req, res) => {
     let client;
     try {
         client = await pool.connect();
         const { idContrato } = req.params;
 
-        // Buscar contrato com informações da hospedagem e pets
         const contratoQuery = `
             SELECT 
                 c.idcontrato,
@@ -818,7 +1109,6 @@ async function calcularValorContrato(req, res) {
 
         const contrato = contratoResult.rows[0];
 
-        // Validar se tem valor_diaria configurado
         if (!contrato.valor_diaria || contrato.valor_diaria <= 0) {
             return res.status(400).json({ 
                 message: 'Hospedagem não possui valor de diária configurado',
@@ -826,7 +1116,6 @@ async function calcularValorContrato(req, res) {
             });
         }
 
-        // Validar datas
         if (!contrato.datainicio) {
             return res.status(400).json({ 
                 message: 'Contrato não possui data de início definida',
@@ -834,14 +1123,12 @@ async function calcularValorContrato(req, res) {
             });
         }
 
-        // Calcular quantidade de dias
         let quantidadeDias = 1;
         
         if (contrato.datafim) {
             const dataInicio = new Date(contrato.datainicio);
             const dataFim = new Date(contrato.datafim);
             
-            // Validar se data fim é maior que data início
             if (dataFim <= dataInicio) {
                 return res.status(400).json({ 
                     message: 'Data fim deve ser posterior à data início',
@@ -849,20 +1136,15 @@ async function calcularValorContrato(req, res) {
                 });
             }
 
-            // Calcular diferença em dias
             const diffTime = Math.abs(dataFim - dataInicio);
             quantidadeDias = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
             quantidadeDias = Math.max(1, quantidadeDias);
         }
 
-        // Calcular valores com a nova fórmula: diária × dias × pets
         const valorDiaria = parseFloat(contrato.valor_diaria);
         const quantidadePets = parseInt(contrato.quantidade_pets) || 0;
-        
-        // Nova fórmula: valor_diaria × quantidade_dias × quantidade_pets
         const valorTotalHospedagem = valorDiaria * quantidadeDias * quantidadePets;
 
-        // Buscar serviços adicionais
         const servicosQuery = `
             SELECT 
                 cs.idservico,
@@ -879,15 +1161,12 @@ async function calcularValorContrato(req, res) {
         const servicosResult = await client.query(servicosQuery, [idContrato]);
         const servicos = servicosResult.rows;
 
-        // Calcular total de serviços
         const totalServicos = servicos.reduce((total, servico) => 
             total + parseFloat(servico.subtotal || 0), 0
         );
 
-        // Calcular valor total do contrato
         const valorTotalContrato = valorTotalHospedagem + totalServicos;
 
-        // Formatar resposta
         const resposta = {
             contrato: {
                 id: contrato.idcontrato,
@@ -940,233 +1219,25 @@ async function calcularValorContrato(req, res) {
     } finally {
         if (client) await client.release();
     }
-}
+};
 
-// E também atualizar a função buscarContratoComRelacionamentos para usar a nova fórmula:
-async function buscarContratoComRelacionamentos(client, idContrato) {
-    try {
-        const contratoQuery = `
-            SELECT c.*, h.nome as hospedagem_nome, h.valor_diaria,
-                   e.idendereco, e.numero as endereco_numero,
-                   e.complemento as endereco_complemento, l.nome as logradouro_nome,
-                   b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
-                   es.sigla as estado_sigla, cep.codigo as cep_codigo,
-                   u.nome as usuario_nome, u.email as usuario_email
-            FROM contrato c
-            LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
-            LEFT JOIN endereco e ON h.idendereco = e.idendereco
-            LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
-            LEFT JOIN bairro b ON l.idbairro = b.idbairro
-            LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
-            LEFT JOIN estado es ON ci.idestado = es.idestado
-            LEFT JOIN cep ON e.idcep = cep.idcep
-            LEFT JOIN usuario u ON c.idusuario = u.idusuario
-            WHERE c.idcontrato = $1
-        `;
-        
-        const contratoResult = await client.query(contratoQuery, [idContrato]);
-        const contrato = contratoResult.rows[0];
-        if (!contrato) return null;
-
-        // Formatar endereço
-        contrato.hospedagem_endereco = formatarEndereco(contrato);
-
-        // Buscar pets do contrato
-        const petsResult = await client.query(
-            `SELECT cp.idcontrato_pet, p.idpet, p.nome, p.sexo, p.nascimento, 
-                    p.idraca, p.idporte, p.idespecie
-             FROM contrato_pet cp 
-             JOIN pet p ON cp.idpet = p.idpet 
-             WHERE cp.idcontrato = $1`,
-            [idContrato]
-        );
-        contrato.pets = petsResult.rows;
-
-        // Buscar serviços do contrato
-        const servicosResult = await client.query(
-            `SELECT cs.idcontratoservico, cs.idservico, cs.quantidade, cs.preco_unitario,
-                    s.descricao, s.preco as preco_atual,
-                    (cs.quantidade * cs.preco_unitario) as subtotal
-             FROM contratoservico cs
-             JOIN servico s ON cs.idservico = s.idservico
-             WHERE cs.idcontrato = $1 
-             ORDER BY s.descricao`,
-            [idContrato]
-        );
-        contrato.servicos = servicosResult.rows;
-
-        // Calcular totais e informações adicionais
-        contrato.total_servicos = contrato.servicos.reduce((total, servico) => 
-            total + parseFloat(servico.subtotal || 0), 0
-        );
-        contrato.status_descricao = statusMap[contrato.status] || 'Desconhecido';
-
-        // Calcular duração em dias
-        if (contrato.datainicio && contrato.datafim) {
-            const diffTime = Math.abs(new Date(contrato.datafim) - new Date(contrato.datainicio));
-            contrato.duracao_dias = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        } else {
-            contrato.duracao_dias = null;
-        }
-
-        // Calcular valores baseados na NOVA FÓRMULA: diária × dias × pets
-        let quantidadeDias = contrato.duracao_dias || 1;
-        let quantidadePets = contrato.pets.length || 0;
-        let valorDiaria = contrato.valor_diaria ? parseFloat(contrato.valor_diaria) : 0;
-
-        // NOVA FÓRMULA: valor_diaria × quantidade_dias × quantidade_pets
-        let valorTotalHospedagem = valorDiaria * quantidadeDias * quantidadePets;
-
-        // Adicionar campos de cálculo ao contrato
-        contrato.calculo_valores = {
-            valor_diaria: valorDiaria,
-            quantidade_dias: quantidadeDias,
-            quantidade_pets: quantidadePets,
-            valor_total_hospedagem: valorTotalHospedagem,
-            valor_total_servicos: contrato.total_servicos || 0,
-            valor_total_contrato: valorTotalHospedagem + (contrato.total_servicos || 0),
-            valor_diaria_formatado: `R$ ${valorDiaria.toFixed(2).replace('.', ',')}`,
-            valor_total_hospedagem_formatado: `R$ ${valorTotalHospedagem.toFixed(2).replace('.', ',')}`,
-            valor_total_servicos_formatado: `R$ ${(contrato.total_servicos || 0).toFixed(2).replace('.', ',')}`,
-            valor_total_contrato_formatado: `R$ ${(valorTotalHospedagem + (contrato.total_servicos || 0)).toFixed(2).replace('.', ',')}`,
-            periodo_dias: `${quantidadeDias} dia(s)`,
-            quantidade_pets_descricao: `${quantidadePets} pet(s)`,
-            formula_descricao: `Diária × Dias × Pets = R$ ${valorDiaria.toFixed(2)} × ${quantidadeDias} × ${quantidadePets}`
-        };
-
-        return contrato;
-    } catch (error) {
-        console.error('Erro ao buscar contrato com relacionamentos:', error);
-        throw error;
-    }
-}
-
-async function buscarContratosPorUsuario(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idUsuario } = req.params;
-        
-        const usuario = await client.query('SELECT idusuario FROM usuario WHERE idusuario = $1', [idUsuario]);
-        if (usuario.rows.length === 0) return res.status(404).json({ message: 'Usuário não encontrado' });
-
-        const query = `
-            SELECT c.*, h.nome as hospedagem_nome, e.numero as endereco_numero,
-                   e.complemento as endereco_complemento, l.nome as logradouro_nome,
-                   b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
-                   es.sigla as estado_sigla, cep.codigo as cep_codigo
-            FROM contrato c
-            LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
-            LEFT JOIN endereco e ON h.idendereco = e.idendereco
-            LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
-            LEFT JOIN bairro b ON l.idbairro = b.idbairro
-            LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
-            LEFT JOIN estado es ON ci.idestado = es.idestado
-            LEFT JOIN cep ON e.idcep = cep.idcep
-            WHERE c.idusuario = $1
-            ORDER BY c.datainicio DESC, c.datacriacao DESC
-        `;
-
-        const result = await client.query(query, [idUsuario]);
-        
-        // Processar cada contrato para incluir pets e serviços
-        const contratosCompletos = await Promise.all(
-            result.rows.map(async (contrato) => {
-                const contratoComEndereco = {
-                    ...contrato,
-                    hospedagem_endereco: formatarEndereco(contrato)
-                };
-
-                // Buscar informações completas do contrato
-                const contratoCompleto = await buscarContratoComRelacionamentos(client, contrato.idcontrato);
-                return contratoCompleto;
-            })
-        );
-
-        res.status(200).json(contratosCompletos);
-    } catch (error) {
-        res.status(500).json({ message: 'Erro ao buscar contratos do usuário', error: error.message });
-    } finally {
-        if (client) await client.release();
-    }
-}
-
-async function buscarContratosPorUsuarioEStatus(req, res) {
-    let client;
-    try {
-        client = await pool.connect();
-        const { idUsuario, status } = req.query;
-
-        if (!idUsuario) return res.status(400).json({ message: 'idUsuario é obrigatório' });
-
-        const usuario = await client.query('SELECT idusuario FROM usuario WHERE idusuario = $1', [idUsuario]);
-        if (usuario.rows.length === 0) return res.status(404).json({ message: 'Usuário não encontrado' });
-
-        let query = `
-            SELECT c.*, h.nome as hospedagem_nome, e.numero as endereco_numero,
-                   e.complemento as endereco_complemento, l.nome as logradouro_nome,
-                   b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
-                   es.sigla as estado_sigla, cep.codigo as cep_codigo
-            FROM contrato c
-            LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
-            LEFT JOIN endereco e ON h.idendereco = e.idendereco
-            LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
-            LEFT JOIN bairro b ON l.idbairro = b.idbairro
-            LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
-            LEFT JOIN estado es ON ci.idestado = es.idestado
-            LEFT JOIN cep ON e.idcep = cep.idcep
-            WHERE c.idusuario = $1
-        `;
-
-        const values = [idUsuario];
-        if (status) {
-            if (!validarStatus(status)) {
-                return res.status(400).json({ message: 'Status inválido' });
-            }
-            query += ` AND c.status = $2`;
-            values.push(status);
-        }
-
-        query += ` ORDER BY c.datainicio DESC, c.datacriacao DESC`;
-
-        const result = await client.query(query, values);
-        
-        // Processar cada contrato para incluir pets e serviços
-        const contratosCompletos = await Promise.all(
-            result.rows.map(async (contrato) => {
-                const contratoComEndereco = {
-                    ...contrato,
-                    hospedagem_endereco: formatarEndereco(contrato)
-                };
-
-                // Buscar informações completas do contrato
-                const contratoCompleto = await buscarContratoComRelacionamentos(client, contrato.idcontrato);
-                return contratoCompleto;
-            })
-        );
-
-        res.status(200).json(contratosCompletos);
-    } catch (error) {
-        res.status(500).json({ message: 'Erro ao buscar contratos do usuário', error: error.message });
-    } finally {
-        if (client) await client.release();
-    }
-}
-
+// Exportação
 module.exports = {
     lerContratos,
     buscarContratoPorId,
     criarContrato,
     atualizarContrato,
-    atualizarDatasContrato,
-    atualizarStatusContrato,
     excluirContrato,
     buscarContratosPorUsuario,
     buscarContratosPorUsuarioEStatus,
+    adicionarServicoContrato,
+    adicionarPetContrato,
     excluirServicoContrato,
     excluirPetContrato,
-    buscarContratoComRelacionamentos,
+    atualizarDatasContrato,
+    atualizarStatusContrato,
     alterarStatusContrato,
     obterTransicoesStatus,
-    calcularValorContrato
+    calcularValorContrato,
+    buscarContratoComRelacionamentos
 };
