@@ -200,9 +200,51 @@ async function removerServico(req, res) {
     }
 }
 
+async function buscarServicoPorId(req, res) {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idServico } = req.params;
+
+        const query = `
+            SELECT 
+                s.idServico,
+                s.descricao,
+                s.preco,
+                s.idHospedagem,
+                s.duracao,
+                s.ativo,
+                s.dataCriacao
+            FROM Servico s
+            WHERE s.idServico = $1
+        `;
+
+        const result = await client.query(query, [idServico]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ 
+                message: 'Serviço não encontrado' 
+            });
+        }
+
+        res.status(200).json(result.rows[0]);
+    } catch (error) {
+        res.status(500).json({
+            message: 'Erro ao buscar serviço',
+            error: error.message
+        });
+        console.error('Erro ao buscar serviço:', error);
+    } finally {
+        if (client) {
+            await client.end();
+        }
+    }
+}
+
 module.exports = {
     listarServicosPorHospedagem,
     adicionarServicoAHospedagem,
     atualizarServico,
-    removerServico
+    removerServico,
+    buscarServicoPorId
 };

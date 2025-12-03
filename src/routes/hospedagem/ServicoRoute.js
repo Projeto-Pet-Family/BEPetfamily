@@ -4,7 +4,7 @@ const ServicoController = require('../../controllers/hospedagem/ServicoControlle
 
 Router.get('/hospedagens/:idHospedagem/servicos', ServicoController.listarServicosPorHospedagem);
 Router.post('/hospedagens/:idHospedagem/servicos', ServicoController.adicionarServicoAHospedagem);
-
+Router.get('/servicos/:idServico', ServicoController.buscarServicoPorId);
 Router.put('/servicos/:idServico', ServicoController.atualizarServico);
 Router.delete('/servicos/:idServico', ServicoController.removerServico);
 
