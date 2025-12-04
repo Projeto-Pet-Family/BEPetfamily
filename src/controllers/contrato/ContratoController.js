@@ -481,76 +481,6 @@ const buscarContratosPorUsuario = async (req, res) => {
     }
 };
 
-const adicionarServicoContrato = async (req, res) => {
-    let client;
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN');
-        const { idContrato } = req.params;
-        const { servicos } = req.body;
-
-        if (!servicos || !Array.isArray(servicos) || servicos.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ message: 'Lista de serviços é obrigatória' });
-        }
-
-        const contrato = await client.query(
-            'SELECT c.*, h.valor_diaria FROM contrato c JOIN hospedagem h ON c.idhospedagem = h.idhospedagem WHERE c.idcontrato = $1',
-            [idContrato]
-        );
-        if (contrato.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ message: 'Contrato não encontrado' });
-        }
-
-        if (statusNaoEditaveis.includes(contrato.rows[0].status)) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ 
-                message: `Não é possível adicionar serviços a um contrato com status "${statusMap[contrato.rows[0].status]}"`
-            });
-        }
-
-        const servicosIds = servicos.map(s => s.idservico);
-        const servicosValidos = await client.query(
-            'SELECT idservico, preco FROM servico WHERE idservico = ANY($1) AND idhospedagem = $2 AND ativo = true',
-            [servicosIds, contrato.rows[0].idhospedagem]
-        );
-
-        if (servicosValidos.rows.length !== servicos.length) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ message: 'Um ou mais serviços não estão disponíveis para esta hospedagem' });
-        }
-
-        const servicosInseridos = [];
-        for (const servico of servicos) {
-            const precoUnitario = servicosValidos.rows.find(s => s.idservico === servico.idservico).preco;
-            const quantidade = servico.quantidade || 1;
-            
-            const result = await client.query(
-                'INSERT INTO contratoservico (idcontrato, idservico, quantidade, preco_unitario) VALUES ($1, $2, $3, $4) RETURNING *',
-                [idContrato, servico.idservico, quantidade, precoUnitario]
-            );
-            servicosInseridos.push(result.rows[0]);
-        }
-
-        await client.query('COMMIT');
-        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
-        
-        res.status(200).json({
-            message: 'Serviço(s) adicionado(s) com sucesso',
-            servicosAdicionados: servicosInseridos,
-            data: contratoCompleto,
-            atualizacao_valores: {
-                valor_servicos_adicional: servicosInseridos.reduce((sum, s) => sum + (s.preco_unitario * s.quantidade), 0),
-                valor_total_atualizado: contratoCompleto.calculo_valores.valor_total_contrato
-            }
-        });
-    } catch (error) {
-        if (client) await client.query('ROLLBACK');
-        res.status(500).json({ message: 'Erro ao adicionar serviço ao contrato', error: error.message });
-    } finally { if (client) client.release(); }
-};
-
 const adicionarPetContrato = async (req, res) => {
     let client;
     try {
@@ -562,6 +492,13 @@ const adicionarPetContrato = async (req, res) => {
         if (!pets || !Array.isArray(pets) || pets.length === 0) {
             await client.query('ROLLBACK');
             return res.status(400).json({ message: 'Lista de pets é obrigatória' });
+        }
+
+        // Verificar se há IDs duplicados na requisição
+        const petsUnicos = [...new Set(pets)];
+        if (petsUnicos.length !== pets.length) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: 'Não é permitido adicionar o mesmo pet múltiplas vezes' });
         }
 
         const contrato = await client.query(
@@ -577,6 +514,21 @@ const adicionarPetContrato = async (req, res) => {
             await client.query('ROLLBACK');
             return res.status(400).json({ 
                 message: `Não é possível adicionar pets a um contrato com status "${statusMap[contrato.rows[0].status]}"`
+            });
+        }
+
+        // Verificar quais pets já estão no contrato
+        const petsExistentes = await client.query(
+            'SELECT idpet FROM contrato_pet WHERE idcontrato = $1 AND idpet = ANY($2)',
+            [idContrato, pets]
+        );
+
+        if (petsExistentes.rows.length > 0) {
+            await client.query('ROLLBACK');
+            const petsExistentesIds = petsExistentes.rows.map(p => p.idpet);
+            return res.status(400).json({ 
+                message: 'Um ou mais pets já estão vinculados a este contrato',
+                petsExistentes: petsExistentesIds
             });
         }
 
@@ -620,6 +572,111 @@ const adicionarPetContrato = async (req, res) => {
     } catch (error) {
         if (client) await client.query('ROLLBACK');
         res.status(500).json({ message: 'Erro ao adicionar pet ao contrato', error: error.message });
+    } finally { if (client) client.release(); }
+};
+
+const adicionarServicoContrato = async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const { idContrato } = req.params;
+        const { servicos } = req.body;
+
+        if (!servicos || !Array.isArray(servicos) || servicos.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: 'Lista de serviços é obrigatória' });
+        }
+
+        // Verificar se há serviços duplicados na requisição
+        const servicosIds = servicos;
+        const servicosUnicos = [...new Set(servicosIds)];
+        if (servicosUnicos.length !== servicos.length) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: 'Não é permitido adicionar o mesmo serviço múltiplas vezes na mesma requisição' });
+        }
+
+        const contrato = await client.query(
+            'SELECT c.*, h.valor_diaria FROM contrato c JOIN hospedagem h ON c.idhospedagem = h.idhospedagem WHERE c.idcontrato = $1',
+            [idContrato]
+        );
+        if (contrato.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Contrato não encontrado' });
+        }
+
+        if (statusNaoEditaveis.includes(contrato.rows[0].status)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ 
+                message: `Não é possível adicionar serviços a um contrato com status "${statusMap[contrato.rows[0].status]}"`
+            });
+        }
+
+        // Verificar quais serviços já estão no contrato
+        const servicosExistentes = await client.query(
+            'SELECT idservico FROM contratoservico WHERE idcontrato = $1 AND idservico = ANY($2)',
+            [idContrato, servicosIds]
+        );
+
+        if (servicosExistentes.rows.length > 0) {
+            await client.query('ROLLBACK');
+            const servicosExistentesIds = servicosExistentes.rows.map(s => s.idservico);
+            return res.status(400).json({ 
+                message: 'Um ou mais serviços já estão vinculados a este contrato',
+                servicosExistentes: servicosExistentesIds
+            });
+        }
+
+        // Buscar informações dos serviços
+        const servicosValidos = await client.query(
+            'SELECT idservico, preco FROM servico WHERE idservico = ANY($1) AND idhospedagem = $2 AND ativo = true',
+            [servicosIds, contrato.rows[0].idhospedagem]
+        );
+
+        if (servicosValidos.rows.length !== servicos.length) {
+            await client.query('ROLLBACK');
+            
+            // Identificar quais serviços não são válidos
+            const servicosValidosIds = servicosValidos.rows.map(s => s.idservico);
+            const servicosInvalidos = servicosIds.filter(id => !servicosValidosIds.includes(id));
+            
+            return res.status(400).json({ 
+                message: 'Um ou mais serviços não estão disponíveis para esta hospedagem',
+                servicosInvalidos: servicosInvalidos
+            });
+        }
+
+        const servicosInseridos = [];
+        for (const idServico of servicosIds) {
+            const servicoInfo = servicosValidos.rows.find(s => s.idservico === idServico);
+            const precoUnitario = servicoInfo.preco;
+            const quantidade = 1; // Quantidade fixa em 1
+            
+            const result = await client.query(
+                'INSERT INTO contratoservico (idcontrato, idservico, quantidade, preco_unitario) VALUES ($1, $2, $3, $4) RETURNING *',
+                [idContrato, idServico, quantidade, precoUnitario]
+            );
+            servicosInseridos.push(result.rows[0]);
+        }
+
+        await client.query('COMMIT');
+        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
+        
+        const valorServicosAdicional = servicosInseridos.reduce((sum, s) => sum + (s.preco_unitario * s.quantidade), 0);
+        
+        res.status(200).json({
+            message: 'Serviço(s) adicionado(s) com sucesso',
+            servicosAdicionados: servicosInseridos,
+            data: contratoCompleto,
+            atualizacao_valores: {
+                valor_servicos_adicional: valorServicosAdicional,
+                valor_total_atualizado: contratoCompleto.calculo_valores.valor_total_contrato
+            }
+        });
+    } catch (error) {
+        if (client) await client.query('ROLLBACK');
+        console.error('Erro detalhado:', error);
+        res.status(500).json({ message: 'Erro ao adicionar serviço ao contrato', error: error.message });
     } finally { if (client) client.release(); }
 };
 
