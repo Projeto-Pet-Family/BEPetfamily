@@ -14,10 +14,12 @@ router.get('/contrato/usuario/:idUsuario', contratoController.buscarContratosPor
 router.get('/contrato/usuario/:idUsuario/status', contratoController.buscarContratosPorUsuarioEStatus);
 
 // Rotas de serviços
+router.get('/contrato/:idContrato/servico', contratoController.lerServicosExistentesContrato);
 router.post('/contrato/:idContrato/servico', contratoController.adicionarServicoContrato);
 router.delete('/contrato/:idContrato/servico/:idServico', contratoController.excluirServicoContrato);
 
 // Rotas de pets
+router.get('/contrato/:idContrato/pet', contratoController.lerPetsExistentesContrato);
 router.post('/contrato/:idContrato/pet', contratoController.adicionarPetContrato);
 router.delete('/contrato/:idContrato/pet/:idPet', contratoController.excluirPetContrato);
 

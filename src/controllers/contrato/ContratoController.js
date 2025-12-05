@@ -685,74 +685,173 @@ const atualizarDatasContrato = async (req, res) => {
     try {
         client = await pool.connect();
         const { idContrato } = req.params;
-        const { dataInicio, dataFim } = req.body;
+        let { dataInicio, dataFim } = req.body;
 
+        // VALIDAÇÃO: Pelo menos uma data deve ser fornecida
         if (dataInicio === undefined && dataFim === undefined) {
-            return res.status(400).json({ message: 'Pelo menos uma data (dataInicio ou dataFim) deve ser fornecida' });
-        }
-
-        const contratoResult = await client.query(
-            'SELECT c.*, h.valor_diaria FROM contrato c JOIN hospedagem h ON c.idhospedagem = h.idhospedagem WHERE c.idcontrato = $1',
-            [idContrato]
-        );
-        if (contratoResult.rows.length === 0) {
-            return res.status(404).json({ message: 'Contrato não encontrado' });
-        }
-
-        const contrato = contratoResult.rows[0];
-        if (statusNaoEditaveis.includes(contrato.status)) {
             return res.status(400).json({ 
-                message: `Não é possível editar datas de um contrato com status "${statusMap[contrato.status]}"` 
+                message: 'Pelo menos uma data (dataInicio ou dataFim) deve ser fornecida' 
             });
         }
 
-        validarDatas(dataInicio, dataFim);
+        // FUNÇÃO: Processar e validar data
+        const processarData = (data, campo) => {
+            if (data === undefined || data === null) {
+                return undefined;
+            }
 
-        const novaDataInicio = dataInicio || contrato.datainicio;
-        const novaDataFim = dataFim || contrato.datafim;
-        let novaDuracaoDias = 1;
+            // Se for string
+            if (typeof data === 'string') {
+                // Pegar apenas a parte da data (YYYY-MM-DD)
+                const dataLimpa = data.split('T')[0].split(' ')[0];
+                
+                // Validar formato
+                const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+                if (!dateRegex.test(dataLimpa)) {
+                    throw new Error(`Formato de ${campo} inválido. Use YYYY-MM-DD`);
+                }
+                
+                return dataLimpa;
+            }
+            
+            // Se for número (timestamp)
+            if (typeof data === 'number') {
+                // Converter para Date e formatar
+                const dataObj = new Date(data);
+                if (isNaN(dataObj.getTime())) {
+                    throw new Error(`${campo} inválido`);
+                }
+                
+                return dataObj.toISOString().split('T')[0];
+            }
+            
+            throw new Error(`Tipo inválido para ${campo}`);
+        };
+
+        // Processar as datas
+        const dataInicioProcessada = processarData(dataInicio, 'dataInicio');
+        const dataFimProcessada = processarData(dataFim, 'dataFim');
+
+        // BUSCAR CONTRATO PARA VALIDAÇÃO
+        const contratoResult = await client.query(
+            'SELECT * FROM contrato WHERE idcontrato = $1',
+            [idContrato]
+        );
         
-        if (novaDataFim) {
-            const diffTime = Math.abs(new Date(novaDataFim) - new Date(novaDataInicio));
-            novaDuracaoDias = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        if (contratoResult.rows.length === 0) {
+            return res.status(404).json({ 
+                message: 'Contrato não encontrado' 
+            });
         }
 
-        const valorDiaria = parseFloat(contrato.valor_diaria || 0);
-        const duracaoAtual = contrato.duracao_dias || 1;
-        const quantidadePetsResult = await client.query('SELECT COUNT(*) as total FROM contrato_pet WHERE idcontrato = $1', [idContrato]);
-        const quantidadePets = parseInt(quantidadePetsResult.rows[0].total) || 0;
+        const contrato = contratoResult.rows[0];
 
-        const valorAtual = valorDiaria * duracaoAtual * quantidadePets;
-        const valorNovo = valorDiaria * novaDuracaoDias * quantidadePets;
-        const diferencaValor = valorNovo - valorAtual;
+        // VALIDAR SE PODE EDITAR (ajuste conforme seus status)
+        const statusNaoEditaveis = ['finalizado', 'cancelado', 'concluido'];
+        if (statusNaoEditaveis.includes(contrato.status)) {
+            return res.status(400).json({ 
+                message: 'Não é possível editar datas deste contrato' 
+            });
+        }
 
-        const { query, values } = construirQueryUpdate({
-            datainicio: dataInicio,
-            datafim: dataFim
-        }, idContrato);
-
-        await client.query(query, values);
-        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
-
-        res.status(200).json({
-            message: 'Datas do contrato atualizadas com sucesso',
-            data: contratoCompleto,
-            alteracoes: {
-                dataInicio: dataInicio !== undefined,
-                dataFim: dataFim !== undefined,
-                duracao_anterior: duracaoAtual,
-                duracao_nova: novaDuracaoDias,
-                ajuste_valor: {
-                    valor_anterior_hospedagem: valorAtual,
-                    valor_novo_hospedagem: valorNovo,
-                    diferenca: diferencaValor,
-                    impacto: diferencaValor > 0 ? 'Aumento' : 'Redução'
-                }
+        // VALIDAÇÕES DE DATAS
+        if (dataInicioProcessada) {
+            const hoje = new Date();
+            hoje.setHours(0, 0, 0, 0);
+            const dataInicioObj = new Date(dataInicioProcessada);
+            
+            if (dataInicioObj < hoje) {
+                return res.status(400).json({ 
+                    message: 'Data início não pode ser anterior à data atual' 
+                });
             }
+        }
+
+        if (dataFimProcessada && dataInicioProcessada) {
+            const dataInicioObj = new Date(dataInicioProcessada);
+            const dataFimObj = new Date(dataFimProcessada);
+            
+            if (dataFimObj < dataInicioObj) {
+                return res.status(400).json({ 
+                    message: 'Data fim não pode ser anterior à data início' 
+                });
+            }
+        }
+
+        // CONSTRUIR QUERY DE UPDATE
+        const updates = [];
+        const values = [];
+        let paramIndex = 1;
+        
+        if (dataInicioProcessada !== undefined) {
+            updates.push(`datainicio = $${paramIndex}::DATE`);
+            values.push(dataInicioProcessada);
+            paramIndex++;
+        }
+        
+        if (dataFimProcessada !== undefined) {
+            updates.push(`datafim = $${paramIndex}::DATE`);
+            values.push(dataFimProcessada);
+            paramIndex++;
+        }
+        
+        // Calcular nova duração se ambas as datas foram fornecidas
+        if (dataInicioProcessada && dataFimProcessada) {
+            const diffTime = Math.abs(
+                new Date(dataFimProcessada) - new Date(dataInicioProcessada)
+            );
+            const novaDuracaoDias = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+            
+            updates.push(`duracao_dias = $${paramIndex}`);
+            values.push(novaDuracaoDias);
+            paramIndex++;
+        }
+        
+        // Adicionar idContrato como último parâmetro
+        values.push(idContrato);
+        
+        const query = `
+            UPDATE contrato 
+            SET ${updates.join(', ')}, 
+                atualizado_em = CURRENT_TIMESTAMP
+            WHERE idcontrato = $${paramIndex}
+            RETURNING *
+        `;
+
+        // EXECUTAR UPDATE
+        const updateResult = await client.query(query, values);
+        
+        if (updateResult.rows.length === 0) {
+            throw new Error('Falha ao atualizar contrato');
+        }
+
+        const contratoAtualizado = updateResult.rows[0];
+
+        // RESPOSTA DE SUCESSO
+        res.status(200).json({
+            success: true,
+            message: 'Datas atualizadas com sucesso',
+            data: contratoAtualizado
         });
+
     } catch (error) {
-        res.status(500).json({ message: 'Erro ao atualizar datas do contrato', error: error.message });
-    } finally { if (client) client.release(); }
+        console.error('Erro ao atualizar datas:', error);
+        
+        // Verificar se é erro do PostgreSQL
+        if (error.message && error.message.includes('integer')) {
+            return res.status(500).json({ 
+                message: 'Erro: O campo de data recebeu um valor inteiro em vez de uma data. Certifique-se de enviar no formato YYYY-MM-DD',
+                error: error.message 
+            });
+        }
+        
+        res.status(500).json({ 
+            message: 'Erro ao atualizar datas do contrato', 
+            error: error.message 
+        });
+    } finally { 
+        if (client) client.release(); 
+    }
 };
 
 const excluirServicoContrato = async (req, res) => {
@@ -1278,6 +1377,408 @@ const calcularValorContrato = async (req, res) => {
     }
 };
 
+const lerServicosExistentesContrato = async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idContrato } = req.params;
+
+        // Verificar se o contrato existe
+        const contratoResult = await client.query(
+            'SELECT idcontrato FROM contrato WHERE idcontrato = $1',
+            [idContrato]
+        );
+
+        if (contratoResult.rows.length === 0) {
+            return res.status(404).json({ 
+                message: 'Contrato não encontrado',
+                error: 'CONTRATO_NAO_ENCONTRADO'
+            });
+        }
+
+        // Buscar serviços do contrato com informações detalhadas
+        const query = `
+            SELECT 
+                cs.idcontratoservico,
+                cs.idcontrato,
+                cs.idservico,
+                cs.quantidade,
+                cs.preco_unitario,
+                cs.data_insercao,
+                s.descricao,
+                s.preco as preco_atual,
+                s.duracao,
+                s.ativo,
+                s.datacriacao as servico_datacriacao,
+                s.dataatualizacao as servico_dataatualizacao,
+                (cs.quantidade * cs.preco_unitario) as subtotal,
+                CASE 
+                    WHEN s.preco != cs.preco_unitario THEN true
+                    ELSE false
+                END as preco_alterado,
+                CASE 
+                    WHEN s.preco > cs.preco_unitario THEN 'aumento'
+                    WHEN s.preco < cs.preco_unitario THEN 'reducao'
+                    ELSE 'igual'
+                END as tipo_alteracao_preco,
+                ABS(s.preco - cs.preco_unitario) as diferenca_preco,
+                ABS(s.preco - cs.preco_unitario) * cs.quantidade as impacto_total_preco
+            FROM contratoservico cs
+            JOIN servico s ON cs.idservico = s.idservico
+            WHERE cs.idcontrato = $1
+            ORDER BY s.descricao ASC
+        `;
+
+        const servicosResult = await client.query(query, [idContrato]);
+        
+        // Calcular totais
+        const totais = servicosResult.rows.reduce((acc, servico) => {
+            acc.valorTotal += parseFloat(servico.subtotal || 0);
+            acc.quantidadeTotal += servico.quantidade || 0;
+            acc.servicosComPrecoAlterado += servico.preco_alterado ? 1 : 0;
+            
+            if (servico.duracao) {
+                acc.totalDuracao += servico.duracao * servico.quantidade;
+                acc.servicosComDuracao++;
+            }
+            
+            return acc;
+        }, {
+            valorTotal: 0,
+            quantidadeTotal: 0,
+            servicosComPrecoAlterado: 0,
+            totalServicos: servicosResult.rows.length,
+            totalDuracao: 0,
+            servicosComDuracao: 0
+        });
+
+        const servicosComDetalhes = servicosResult.rows.map(servico => {
+            const precoUnitario = parseFloat(servico.preco_unitario || 0);
+            const precoAtual = parseFloat(servico.preco_atual || 0);
+            const subtotal = parseFloat(servico.subtotal || 0);
+            
+            return {
+                id: servico.idcontratoservico,
+                idContrato: servico.idcontrato,
+                idServico: servico.idservico,
+                descricao: servico.descricao || 'Não informado',
+                quantidade: servico.quantidade || 1,
+                precoUnitario: precoUnitario,
+                precoAtual: precoAtual,
+                duracao: servico.duracao ? parseInt(servico.duracao) : null,
+                ativo: servico.ativo,
+                subtotal: subtotal,
+                dataInsercao: servico.data_insercao,
+                servicoDataCriacao: servico.servico_datacriacao,
+                servicoDataAtualizacao: servico.servico_dataatualizacao,
+                precoAlterado: servico.preco_alterado || false,
+                tipoAlteracaoPreco: servico.tipo_alteracao_preco || 'igual',
+                diferencaPreco: servico.diferenca_preco ? parseFloat(servico.diferenca_preco) : 0,
+                impactoTotalPreco: servico.impacto_total_preco ? parseFloat(servico.impacto_total_preco) : 0,
+                // Campos formatados
+                precoUnitarioFormatado: `R$ ${precoUnitario.toFixed(2).replace('.', ',')}`,
+                precoAtualFormatado: `R$ ${precoAtual.toFixed(2).replace('.', ',')}`,
+                subtotalFormatado: `R$ ${subtotal.toFixed(2).replace('.', ',')}`,
+                duracaoFormatada: servico.duracao ? `${servico.duracao} minuto(s)` : 'Não definida',
+                status: servico.ativo ? 'Ativo' : 'Inativo'
+            };
+        });
+
+        // Calcular duração média
+        let duracaoMedia = null;
+        if (totais.servicosComDuracao > 0) {
+            duracaoMedia = totais.totalDuracao / totais.servicosComDuracao;
+        }
+
+        res.status(200).json({
+            message: 'Serviços do contrato listados com sucesso',
+            data: {
+                idContrato,
+                servicos: servicosComDetalhes,
+                totais: {
+                    ...totais,
+                    valorTotalFormatado: `R$ ${totais.valorTotal.toFixed(2).replace('.', ',')}`,
+                    duracaoMedia: duracaoMedia ? `${duracaoMedia.toFixed(0)} minuto(s)` : 'Não disponível',
+                    valorMedioPorServico: totais.totalServicos > 0 
+                        ? `R$ ${(totais.valorTotal / totais.totalServicos).toFixed(2).replace('.', ',')}`
+                        : 'R$ 0,00'
+                },
+                resumo: {
+                    servicosAtivos: servicosComDetalhes.filter(s => s.ativo).length,
+                    servicosInativos: servicosComDetalhes.filter(s => !s.ativo).length,
+                    servicosComPrecoAlterado: totais.servicosComPrecoAlterado,
+                    servicosComDuracao: totais.servicosComDuracao,
+                    servicosSemDuracao: totais.totalServicos - totais.servicosComDuracao,
+                    tiposAlteracaoPreco: {
+                        aumento: servicosComDetalhes.filter(s => s.tipoAlteracaoPreco === 'aumento').length,
+                        reducao: servicosComDetalhes.filter(s => s.tipoAlteracaoPreco === 'reducao').length,
+                        igual: servicosComDetalhes.filter(s => s.tipoAlteracaoPreco === 'igual').length
+                    }
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao ler serviços do contrato:', error);
+        res.status(500).json({ 
+            message: 'Erro ao listar serviços do contrato', 
+            error: error.message,
+            errorCode: error.code 
+        });
+    } finally {
+        if (client) await client.release();
+    }
+};
+
+const lerPetsExistentesContrato = async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idContrato } = req.params;
+
+        // Verificar se o contrato existe
+        const contratoResult = await client.query(
+            'SELECT idcontrato FROM contrato WHERE idcontrato = $1',
+            [idContrato]
+        );
+
+        if (contratoResult.rows.length === 0) {
+            return res.status(404).json({ 
+                message: 'Contrato não encontrado',
+                error: 'CONTRATO_NAO_ENCONTRADO'
+            });
+        }
+
+        // Buscar pets do contrato com informações detalhadas
+        const query = `
+            SELECT 
+                cp.idcontrato_pet,
+                cp.idcontrato,
+                cp.idpet,
+                p.nome,
+                p.sexo,
+                p.nascimento,
+                u.idusuario,
+                u.nome as tutor_nome,
+                u.email as tutor_email,
+                -- Informações de espécie
+                e.idespecie,
+                e.descricao as especie_nome,
+                -- Informações de raça
+                r.idraca,
+                r.descricao as raca_nome,
+                -- Informações de porte
+                po.idporte,
+                po.descricao as porte_nome,
+                po.descricao as porte_descricao
+            FROM contrato_pet cp
+            JOIN pet p ON cp.idpet = p.idpet
+            JOIN usuario u ON p.idusuario = u.idusuario
+            LEFT JOIN especie e ON p.idespecie = e.idespecie
+            LEFT JOIN raca r ON p.idraca = r.idraca
+            LEFT JOIN porte po ON p.idporte = po.idporte
+            WHERE cp.idcontrato = $1
+            ORDER BY p.nome ASC
+        `;
+
+        const petsResult = await client.query(query, [idContrato]);
+        
+        // Formatar dados dos pets
+        const hoje = new Date();
+        const petsComDetalhes = petsResult.rows.map(pet => {
+            const dataNascimento = pet.nascimento ? new Date(pet.nascimento) : null;
+            let idadeFormatada = 'Não informada';
+            let idadeAnos = null;
+            let idadeMeses = null;
+            
+            if (dataNascimento) {
+                const diffTime = hoje - dataNascimento;
+                idadeAnos = Math.floor(diffTime / (1000 * 60 * 60 * 24 * 365.25));
+                idadeMeses = Math.floor((diffTime % (1000 * 60 * 60 * 24 * 365.25)) / (1000 * 60 * 60 * 24 * 30.44));
+                
+                if (idadeAnos > 0) {
+                    idadeFormatada = `${idadeAnos} ano(s)`;
+                    if (idadeMeses > 0) {
+                        idadeFormatada += ` e ${idadeMeses} mês(es)`;
+                    }
+                } else if (idadeMeses > 0) {
+                    idadeFormatada = `${idadeMeses} mês(es)`;
+                    const diasRestantes = Math.floor((diffTime % (1000 * 60 * 60 * 24 * 30.44)) / (1000 * 60 * 60 * 24));
+                    if (diasRestantes > 0) {
+                        idadeFormatada += ` e ${diasRestantes} dia(s)`;
+                    }
+                } else {
+                    const dias = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+                    idadeFormatada = `${dias} dia(s)`;
+                }
+            }
+
+            return {
+                idContratoPet: pet.idcontrato_pet,
+                idContrato: pet.idcontrato,
+                idPet: pet.idpet,
+                nome: pet.nome || 'Não informado',
+                sexo: pet.sexo ? (pet.sexo === 'M' ? 'Macho' : 'Fêmea') : 'Não informado',
+                nascimento: pet.nascimento,
+                nascimentoFormatado: pet.nascimento 
+                    ? new Date(pet.nascimento).toLocaleDateString('pt-BR')
+                    : 'Não informado',
+                idade: {
+                    anos: idadeAnos,
+                    meses: idadeMeses,
+                    formatada: idadeFormatada
+                },
+                especie: {
+                    id: pet.idespecie,
+                    nome: pet.especie_nome || 'Não informada'
+                },
+                raca: {
+                    id: pet.idraca,
+                    nome: pet.raca_nome || 'Não informada'
+                },
+                porte: {
+                    id: pet.idporte,
+                    nome: pet.porte_nome || 'Não informado',
+                    descricao: pet.porte_descricao || ''
+                },
+                tutor: {
+                    id: pet.idusuario,
+                    nome: pet.tutor_nome || 'Não informado',
+                    email: pet.tutor_email || 'Não informado'
+                },
+                dataInsercao: pet.data_insercao
+            };
+        });
+
+        // Estatísticas
+        const estatisticas = petsComDetalhes.reduce((acc, pet) => {
+            // Contagem por espécie
+            if (pet.especie.nome) {
+                acc.especies[pet.especie.nome] = (acc.especies[pet.especie.nome] || 0) + 1;
+            } else {
+                acc.especies['Não informada'] = (acc.especies['Não informada'] || 0) + 1;
+            }
+            
+            // Contagem por sexo
+            if (pet.sexo === 'Macho') {
+                acc.sexos.macho++;
+            } else if (pet.sexo === 'Fêmea') {
+                acc.sexos.femea++;
+            } else {
+                acc.sexos.naoInformado++;
+            }
+            
+            // Contagem por porte
+            if (pet.porte.nome) {
+                acc.portes[pet.porte.nome] = (acc.portes[pet.porte.nome] || 0) + 1;
+            } else {
+                acc.portes['Não informado'] = (acc.portes['Não informado'] || 0) + 1;
+            }
+            
+            // Contagem por raça
+            if (pet.raca.nome) {
+                acc.racas[pet.raca.nome] = (acc.racas[pet.raca.nome] || 0) + 1;
+            } else {
+                acc.racas['Não informada'] = (acc.racas['Não informada'] || 0) + 1;
+            }
+            
+            // Idade média
+            if (pet.idade.anos !== null) {
+                acc.totalIdadeAnos += parseInt(pet.idade.anos || 0);
+                acc.totalIdadeMeses += parseInt(pet.idade.meses || 0);
+                acc.petsComIdade++;
+            }
+            
+            return acc;
+        }, {
+            total: petsComDetalhes.length,
+            especies: {},
+            sexos: { macho: 0, femea: 0, naoInformado: 0 },
+            portes: {},
+            racas: {},
+            totalIdadeAnos: 0,
+            totalIdadeMeses: 0,
+            petsComIdade: 0
+        });
+
+        // Calcular idade média
+        let idadeMediaFormatada = 'Não disponível';
+        if (estatisticas.petsComIdade > 0) {
+            const mediaAnos = estatisticas.totalIdadeAnos / estatisticas.petsComIdade;
+            const mediaMeses = estatisticas.totalIdadeMeses / estatisticas.petsComIdade;
+            
+            idadeMediaFormatada = '';
+            if (mediaAnos >= 1) {
+                idadeMediaFormatada += `${mediaAnos.toFixed(1)} ano(s)`;
+                if (mediaMeses >= 1) {
+                    idadeMediaFormatada += ` e ${Math.round(mediaMeses)} mês(es)`;
+                }
+            } else if (mediaMeses >= 1) {
+                idadeMediaFormatada += `${Math.round(mediaMeses)} mês(es)`;
+            } else {
+                idadeMediaFormatada = 'Menos de 1 mês';
+            }
+        }
+
+        // Converter objetos em arrays para facilitar o consumo
+        const especiesArray = Object.entries(estatisticas.especies).map(([nome, quantidade]) => ({
+            nome,
+            quantidade,
+            porcentagem: ((quantidade / estatisticas.total) * 100).toFixed(1) + '%'
+        }));
+
+        const portesArray = Object.entries(estatisticas.portes).map(([nome, quantidade]) => ({
+            nome,
+            quantidade,
+            porcentagem: ((quantidade / estatisticas.total) * 100).toFixed(1) + '%'
+        }));
+
+        const racasArray = Object.entries(estatisticas.racas).map(([nome, quantidade]) => ({
+            nome,
+            quantidade,
+            porcentagem: ((quantidade / estatisticas.total) * 100).toFixed(1) + '%'
+        }));
+
+        res.status(200).json({
+            message: 'Pets do contrato listados com sucesso',
+            data: {
+                idContrato,
+                pets: petsComDetalhes,
+                estatisticas: {
+                    total: estatisticas.total,
+                    especies: especiesArray,
+                    sexos: estatisticas.sexos,
+                    portes: portesArray,
+                    racas: racasArray,
+                    idadeMedia: idadeMediaFormatada,
+                    distribuicaoIdade: {
+                        filhotes: petsComDetalhes.filter(p => p.idade.anos !== null && p.idade.anos < 1).length,
+                        adultos: petsComDetalhes.filter(p => p.idade.anos !== null && p.idade.anos >= 1 && p.idade.anos < 7).length,
+                        idosos: petsComDetalhes.filter(p => p.idade.anos !== null && p.idade.anos >= 7).length,
+                        idadeNaoInformada: petsComDetalhes.filter(p => p.idade.anos === null).length
+                    }
+                },
+                resumo: {
+                    tutor: petsComDetalhes.length > 0 ? petsComDetalhes[0].tutor : null,
+                    especiesUnicas: especiesArray.length,
+                    racasUnicas: racasArray.length,
+                    portesUnicos: portesArray.length
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao ler pets do contrato:', error);
+        res.status(500).json({ 
+            message: 'Erro ao listar pets do contrato', 
+            error: error.message,
+            errorCode: error.code 
+        });
+    } finally {
+        if (client) await client.release();
+    }
+};
+
 // Exportação
 module.exports = {
     lerContratos,
@@ -1296,5 +1797,7 @@ module.exports = {
     alterarStatusContrato,
     obterTransicoesStatus,
     calcularValorContrato,
-    buscarContratoComRelacionamentos
+    buscarContratoComRelacionamentos,
+    lerServicosExistentesContrato,
+    lerPetsExistentesContrato
 };
