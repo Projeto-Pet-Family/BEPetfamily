@@ -1293,9 +1293,12 @@ const lerServicosExistentesContrato = async (req, res) => {
         client = await pool.connect();
         const { idContrato } = req.params;
 
-        // Verificar se o contrato existe
+        // Verificar se o contrato existe e obter dados da hospedagem
         const contratoResult = await client.query(
-            'SELECT idcontrato FROM contrato WHERE idcontrato = $1',
+            `SELECT c.idcontrato, h.idhospedagem, h.nome as hospedagem_nome
+             FROM contrato c
+             JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+             WHERE c.idcontrato = $1`,
             [idContrato]
         );
 
@@ -1306,125 +1309,51 @@ const lerServicosExistentesContrato = async (req, res) => {
             });
         }
 
-        // Buscar serviços do contrato com informações detalhadas
+        const contrato = contratoResult.rows[0];
+        const idHospedagem = contrato.idhospedagem;
+
+        // Buscar TODOS os serviços da hospedagem e verificar se estão no contrato
         const query = `
             SELECT 
-                cs.idcontratoservico,
-                cs.idcontrato,
-                cs.idservico,
-                cs.quantidade,
-                cs.preco_unitario,
-                cs.data_insercao,
+                s.idservico,
                 s.descricao,
                 s.preco as preco_atual,
-                s.duracao,
                 s.ativo,
-                s.datacriacao as servico_datacriacao,
-                s.dataatualizacao as servico_dataatualizacao,
-                (cs.quantidade * cs.preco_unitario) as subtotal,
-                CASE 
-                    WHEN s.preco != cs.preco_unitario THEN true
-                    ELSE false
-                END as preco_alterado,
-                CASE 
-                    WHEN s.preco > cs.preco_unitario THEN 'aumento'
-                    WHEN s.preco < cs.preco_unitario THEN 'reducao'
-                    ELSE 'igual'
-                END as tipo_alteracao_preco,
-                ABS(s.preco - cs.preco_unitario) as diferenca_preco,
-                ABS(s.preco - cs.preco_unitario) * cs.quantidade as impacto_total_preco
-            FROM contratoservico cs
-            JOIN servico s ON cs.idservico = s.idservico
-            WHERE cs.idcontrato = $1
-            ORDER BY s.descricao ASC
+                -- Verificar se o serviço está no contrato
+                EXISTS (
+                    SELECT 1 FROM contratoservico cs 
+                    WHERE cs.idservico = s.idservico 
+                    AND cs.idcontrato = $1
+                ) as esta_no_contrato
+            FROM servico s
+            WHERE s.idhospedagem = $2
+            ORDER BY esta_no_contrato DESC, s.descricao ASC
         `;
 
-        const servicosResult = await client.query(query, [idContrato]);
+        const servicosResult = await client.query(query, [idContrato, idHospedagem]);
         
-        // Calcular totais
-        const totais = servicosResult.rows.reduce((acc, servico) => {
-            acc.valorTotal += parseFloat(servico.subtotal || 0);
-            acc.quantidadeTotal += servico.quantidade || 0;
-            acc.servicosComPrecoAlterado += servico.preco_alterado ? 1 : 0;
-            
-            if (servico.duracao) {
-                acc.totalDuracao += servico.duracao * servico.quantidade;
-                acc.servicosComDuracao++;
-            }
-            
-            return acc;
-        }, {
-            valorTotal: 0,
-            quantidadeTotal: 0,
-            servicosComPrecoAlterado: 0,
-            totalServicos: servicosResult.rows.length,
-            totalDuracao: 0,
-            servicosComDuracao: 0
-        });
-
-        const servicosComDetalhes = servicosResult.rows.map(servico => {
-            const precoUnitario = parseFloat(servico.preco_unitario || 0);
-            const precoAtual = parseFloat(servico.preco_atual || 0);
-            const subtotal = parseFloat(servico.subtotal || 0);
-            
+        // Formatar serviços simplificados
+        const servicosSimples = servicosResult.rows.map(servico => {
             return {
-                id: servico.idcontratoservico,
-                idContrato: servico.idcontrato,
                 idServico: servico.idservico,
                 descricao: servico.descricao || 'Não informado',
-                quantidade: servico.quantidade || 1,
-                precoUnitario: precoUnitario,
-                precoAtual: precoAtual,
-                duracao: servico.duracao ? parseInt(servico.duracao) : null,
+                precoAtual: parseFloat(servico.preco_atual || 0),
                 ativo: servico.ativo,
-                subtotal: subtotal,
-                dataInsercao: servico.data_insercao,
-                servicoDataCriacao: servico.servico_datacriacao,
-                servicoDataAtualizacao: servico.servico_dataatualizacao,
-                precoAlterado: servico.preco_alterado || false,
-                tipoAlteracaoPreco: servico.tipo_alteracao_preco || 'igual',
-                diferencaPreco: servico.diferenca_preco ? parseFloat(servico.diferenca_preco) : 0,
-                impactoTotalPreco: servico.impacto_total_preco ? parseFloat(servico.impacto_total_preco) : 0,
-                // Campos formatados
-                precoUnitarioFormatado: `R$ ${precoUnitario.toFixed(2).replace('.', ',')}`,
-                precoAtualFormatado: `R$ ${precoAtual.toFixed(2).replace('.', ',')}`,
-                subtotalFormatado: `R$ ${subtotal.toFixed(2).replace('.', ',')}`,
-                duracaoFormatada: servico.duracao ? `${servico.duracao} minuto(s)` : 'Não definida',
-                status: servico.ativo ? 'Ativo' : 'Inativo'
+                estaNoContrato: servico.esta_no_contrato
             };
         });
 
-        // Calcular duração média
-        let duracaoMedia = null;
-        if (totais.servicosComDuracao > 0) {
-            duracaoMedia = totais.totalDuracao / totais.servicosComDuracao;
-        }
-
         res.status(200).json({
-            message: 'Serviços do contrato listados com sucesso',
+            message: 'Serviços da hospedagem listados com sucesso',
             data: {
-                idContrato,
-                servicos: servicosComDetalhes,
-                totais: {
-                    ...totais,
-                    valorTotalFormatado: `R$ ${totais.valorTotal.toFixed(2).replace('.', ',')}`,
-                    duracaoMedia: duracaoMedia ? `${duracaoMedia.toFixed(0)} minuto(s)` : 'Não disponível',
-                    valorMedioPorServico: totais.totalServicos > 0 
-                        ? `R$ ${(totais.valorTotal / totais.totalServicos).toFixed(2).replace('.', ',')}`
-                        : 'R$ 0,00'
+                contrato: {
+                    id: contrato.idcontrato
                 },
-                resumo: {
-                    servicosAtivos: servicosComDetalhes.filter(s => s.ativo).length,
-                    servicosInativos: servicosComDetalhes.filter(s => !s.ativo).length,
-                    servicosComPrecoAlterado: totais.servicosComPrecoAlterado,
-                    servicosComDuracao: totais.servicosComDuracao,
-                    servicosSemDuracao: totais.totalServicos - totais.servicosComDuracao,
-                    tiposAlteracaoPreco: {
-                        aumento: servicosComDetalhes.filter(s => s.tipoAlteracaoPreco === 'aumento').length,
-                        reducao: servicosComDetalhes.filter(s => s.tipoAlteracaoPreco === 'reducao').length,
-                        igual: servicosComDetalhes.filter(s => s.tipoAlteracaoPreco === 'igual').length
-                    }
-                }
+                hospedagem: {
+                    id: contrato.idhospedagem,
+                    nome: contrato.hospedagem_nome || 'Não informado'
+                },
+                servicos: servicosSimples,
             }
         });
 
@@ -1446,9 +1375,21 @@ const lerPetsExistentesContrato = async (req, res) => {
         client = await pool.connect();
         const { idContrato } = req.params;
 
-        // Verificar se o contrato existe
+        // Verificar se o contrato existe e obter dados do usuário e hospedagem
         const contratoResult = await client.query(
-            'SELECT idcontrato FROM contrato WHERE idcontrato = $1',
+            `SELECT 
+                c.idcontrato,
+                u.idusuario,
+                u.nome as tutor_nome,
+                u.email,
+                -- Informações da hospedagem
+                h.idhospedagem,
+                h.nome as hospedagem_nome,
+                h.telefone as hospedagem_telefone
+             FROM contrato c
+             JOIN usuario u ON c.idusuario = u.idusuario
+             JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+             WHERE c.idcontrato = $1`,
             [idContrato]
         );
 
@@ -1459,228 +1400,59 @@ const lerPetsExistentesContrato = async (req, res) => {
             });
         }
 
-        // Buscar pets do contrato com informações detalhadas
+        const contrato = contratoResult.rows[0];
+        const idUsuarioContrato = contrato.idusuario;
+
+        // Buscar todos os pets do usuário com status no contrato
         const query = `
             SELECT 
-                cp.idcontrato_pet,
-                cp.idcontrato,
-                cp.idpet,
-                p.nome,
+                p.idpet,
+                p.nome as pet_nome,
                 p.sexo,
-                p.nascimento,
-                u.idusuario,
-                u.nome as tutor_nome,
-                u.email as tutor_email,
-                -- Informações de espécie
-                e.idespecie,
-                e.descricao as especie_nome,
-                -- Informações de raça
-                r.idraca,
-                r.descricao as raca_nome,
-                -- Informações de porte
-                po.idporte,
-                po.descricao as porte_nome,
-                po.descricao as porte_descricao
-            FROM contrato_pet cp
-            JOIN pet p ON cp.idpet = p.idpet
-            JOIN usuario u ON p.idusuario = u.idusuario
-            LEFT JOIN especie e ON p.idespecie = e.idespecie
-            LEFT JOIN raca r ON p.idraca = r.idraca
-            LEFT JOIN porte po ON p.idporte = po.idporte
-            WHERE cp.idcontrato = $1
-            ORDER BY p.nome ASC
+                -- Verificar se o pet está no contrato
+                EXISTS (
+                    SELECT 1 FROM contrato_pet cp 
+                    WHERE cp.idpet = p.idpet 
+                    AND cp.idcontrato = $1
+                ) as esta_no_contrato
+            FROM pet p
+            WHERE p.idusuario = $2
+            ORDER BY esta_no_contrato DESC, p.nome ASC
         `;
 
-        const petsResult = await client.query(query, [idContrato]);
+        const petsResult = await client.query(query, [idContrato, idUsuarioContrato]);
         
-        // Formatar dados dos pets
-        const hoje = new Date();
-        const petsComDetalhes = petsResult.rows.map(pet => {
-            const dataNascimento = pet.nascimento ? new Date(pet.nascimento) : null;
-            let idadeFormatada = 'Não informada';
-            let idadeAnos = null;
-            let idadeMeses = null;
-            
-            if (dataNascimento) {
-                const diffTime = hoje - dataNascimento;
-                idadeAnos = Math.floor(diffTime / (1000 * 60 * 60 * 24 * 365.25));
-                idadeMeses = Math.floor((diffTime % (1000 * 60 * 60 * 24 * 365.25)) / (1000 * 60 * 60 * 24 * 30.44));
-                
-                if (idadeAnos > 0) {
-                    idadeFormatada = `${idadeAnos} ano(s)`;
-                    if (idadeMeses > 0) {
-                        idadeFormatada += ` e ${idadeMeses} mês(es)`;
-                    }
-                } else if (idadeMeses > 0) {
-                    idadeFormatada = `${idadeMeses} mês(es)`;
-                    const diasRestantes = Math.floor((diffTime % (1000 * 60 * 60 * 24 * 30.44)) / (1000 * 60 * 60 * 24));
-                    if (diasRestantes > 0) {
-                        idadeFormatada += ` e ${diasRestantes} dia(s)`;
-                    }
-                } else {
-                    const dias = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-                    idadeFormatada = `${dias} dia(s)`;
-                }
-            }
-
-            return {
-                idContratoPet: pet.idcontrato_pet,
-                idContrato: pet.idcontrato,
-                idPet: pet.idpet,
-                nome: pet.nome || 'Não informado',
-                sexo: pet.sexo ? (pet.sexo === 'M' ? 'Macho' : 'Fêmea') : 'Não informado',
-                nascimento: pet.nascimento,
-                nascimentoFormatado: pet.nascimento 
-                    ? new Date(pet.nascimento).toLocaleDateString('pt-BR')
-                    : 'Não informado',
-                idade: {
-                    anos: idadeAnos,
-                    meses: idadeMeses,
-                    formatada: idadeFormatada
-                },
-                especie: {
-                    id: pet.idespecie,
-                    nome: pet.especie_nome || 'Não informada'
-                },
-                raca: {
-                    id: pet.idraca,
-                    nome: pet.raca_nome || 'Não informada'
-                },
-                porte: {
-                    id: pet.idporte,
-                    nome: pet.porte_nome || 'Não informado',
-                    descricao: pet.porte_descricao || ''
-                },
-                tutor: {
-                    id: pet.idusuario,
-                    nome: pet.tutor_nome || 'Não informado',
-                    email: pet.tutor_email || 'Não informado'
-                },
-                dataInsercao: pet.data_insercao
-            };
-        });
-
-        // Estatísticas
-        const estatisticas = petsComDetalhes.reduce((acc, pet) => {
-            // Contagem por espécie
-            if (pet.especie.nome) {
-                acc.especies[pet.especie.nome] = (acc.especies[pet.especie.nome] || 0) + 1;
-            } else {
-                acc.especies['Não informada'] = (acc.especies['Não informada'] || 0) + 1;
-            }
-            
-            // Contagem por sexo
-            if (pet.sexo === 'Macho') {
-                acc.sexos.macho++;
-            } else if (pet.sexo === 'Fêmea') {
-                acc.sexos.femea++;
-            } else {
-                acc.sexos.naoInformado++;
-            }
-            
-            // Contagem por porte
-            if (pet.porte.nome) {
-                acc.portes[pet.porte.nome] = (acc.portes[pet.porte.nome] || 0) + 1;
-            } else {
-                acc.portes['Não informado'] = (acc.portes['Não informado'] || 0) + 1;
-            }
-            
-            // Contagem por raça
-            if (pet.raca.nome) {
-                acc.racas[pet.raca.nome] = (acc.racas[pet.raca.nome] || 0) + 1;
-            } else {
-                acc.racas['Não informada'] = (acc.racas['Não informada'] || 0) + 1;
-            }
-            
-            // Idade média
-            if (pet.idade.anos !== null) {
-                acc.totalIdadeAnos += parseInt(pet.idade.anos || 0);
-                acc.totalIdadeMeses += parseInt(pet.idade.meses || 0);
-                acc.petsComIdade++;
-            }
-            
-            return acc;
-        }, {
-            total: petsComDetalhes.length,
-            especies: {},
-            sexos: { macho: 0, femea: 0, naoInformado: 0 },
-            portes: {},
-            racas: {},
-            totalIdadeAnos: 0,
-            totalIdadeMeses: 0,
-            petsComIdade: 0
-        });
-
-        // Calcular idade média
-        let idadeMediaFormatada = 'Não disponível';
-        if (estatisticas.petsComIdade > 0) {
-            const mediaAnos = estatisticas.totalIdadeAnos / estatisticas.petsComIdade;
-            const mediaMeses = estatisticas.totalIdadeMeses / estatisticas.petsComIdade;
-            
-            idadeMediaFormatada = '';
-            if (mediaAnos >= 1) {
-                idadeMediaFormatada += `${mediaAnos.toFixed(1)} ano(s)`;
-                if (mediaMeses >= 1) {
-                    idadeMediaFormatada += ` e ${Math.round(mediaMeses)} mês(es)`;
-                }
-            } else if (mediaMeses >= 1) {
-                idadeMediaFormatada += `${Math.round(mediaMeses)} mês(es)`;
-            } else {
-                idadeMediaFormatada = 'Menos de 1 mês';
-            }
-        }
-
-        // Converter objetos em arrays para facilitar o consumo
-        const especiesArray = Object.entries(estatisticas.especies).map(([nome, quantidade]) => ({
-            nome,
-            quantidade,
-            porcentagem: ((quantidade / estatisticas.total) * 100).toFixed(1) + '%'
-        }));
-
-        const portesArray = Object.entries(estatisticas.portes).map(([nome, quantidade]) => ({
-            nome,
-            quantidade,
-            porcentagem: ((quantidade / estatisticas.total) * 100).toFixed(1) + '%'
-        }));
-
-        const racasArray = Object.entries(estatisticas.racas).map(([nome, quantidade]) => ({
-            nome,
-            quantidade,
-            porcentagem: ((quantidade / estatisticas.total) * 100).toFixed(1) + '%'
+        // Formatar resposta simplificada
+        const petsSimples = petsResult.rows.map(pet => ({
+            idPet: pet.idpet,
+            nome: pet.pet_nome || 'Não informado',
+            sexo: pet.sexo ? (pet.sexo === 'M' ? 'Macho' : 'Fêmea') : 'Não informado',
+            estaNoContrato: pet.esta_no_contrato
         }));
 
         res.status(200).json({
-            message: 'Pets do contrato listados com sucesso',
+            message: 'Pets do usuário listados com sucesso',
             data: {
-                idContrato,
-                pets: petsComDetalhes,
-                estatisticas: {
-                    total: estatisticas.total,
-                    especies: especiesArray,
-                    sexos: estatisticas.sexos,
-                    portes: portesArray,
-                    racas: racasArray,
-                    idadeMedia: idadeMediaFormatada,
-                    distribuicaoIdade: {
-                        filhotes: petsComDetalhes.filter(p => p.idade.anos !== null && p.idade.anos < 1).length,
-                        adultos: petsComDetalhes.filter(p => p.idade.anos !== null && p.idade.anos >= 1 && p.idade.anos < 7).length,
-                        idosos: petsComDetalhes.filter(p => p.idade.anos !== null && p.idade.anos >= 7).length,
-                        idadeNaoInformada: petsComDetalhes.filter(p => p.idade.anos === null).length
-                    }
+                contrato: {
+                    id: contrato.idcontrato,
                 },
-                resumo: {
-                    tutor: petsComDetalhes.length > 0 ? petsComDetalhes[0].tutor : null,
-                    especiesUnicas: especiesArray.length,
-                    racasUnicas: racasArray.length,
-                    portesUnicos: portesArray.length
-                }
+                hospedagem: {
+                    id: contrato.idhospedagem,
+                    nome: contrato.hospedagem_nome || 'Não informado',
+                },
+                usuario: {
+                    id: contrato.idusuario,
+                    nome: contrato.tutor_nome || 'Não informado',
+                    email: contrato.email || 'Não informado'
+                },
+                pets: petsSimples
             }
         });
 
     } catch (error) {
-        console.error('Erro ao ler pets do contrato:', error);
+        console.error('Erro ao listar pets do usuário:', error);
         res.status(500).json({ 
-            message: 'Erro ao listar pets do contrato', 
+            message: 'Erro ao listar pets do usuário', 
             error: error.message,
             errorCode: error.code 
         });
@@ -1688,7 +1460,6 @@ const lerPetsExistentesContrato = async (req, res) => {
         if (client) await client.release();
     }
 };
-
 // Exportação
 module.exports = {
     lerContratos,
