@@ -685,168 +685,78 @@ const atualizarDatasContrato = async (req, res) => {
     try {
         client = await pool.connect();
         const { idContrato } = req.params;
-        let { dataInicio, dataFim } = req.body;
+        const { dataInicio, dataFim } = req.body;
 
-        // VALIDAÇÃO: Pelo menos uma data deve ser fornecida
-        if (dataInicio === undefined && dataFim === undefined) {
+        // Validação básica
+        if (!dataInicio && !dataFim) {
             return res.status(400).json({ 
-                message: 'Pelo menos uma data (dataInicio ou dataFim) deve ser fornecida' 
+                success: false,
+                message: 'Nenhuma data fornecida para atualização' 
             });
         }
 
-        // FUNÇÃO: Processar e validar data
-        const processarData = (data, campo) => {
-            if (data === undefined || data === null) {
-                return undefined;
-            }
-
-            // Se for string
-            if (typeof data === 'string') {
-                // Pegar apenas a parte da data (YYYY-MM-DD)
-                const dataLimpa = data.split('T')[0].split(' ')[0];
-                
-                // Validar formato
-                const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-                if (!dateRegex.test(dataLimpa)) {
-                    throw new Error(`Formato de ${campo} inválido. Use YYYY-MM-DD`);
-                }
-                
-                return dataLimpa;
-            }
-            
-            // Se for número (timestamp)
-            if (typeof data === 'number') {
-                // Converter para Date e formatar
-                const dataObj = new Date(data);
-                if (isNaN(dataObj.getTime())) {
-                    throw new Error(`${campo} inválido`);
-                }
-                
-                return dataObj.toISOString().split('T')[0];
-            }
-            
-            throw new Error(`Tipo inválido para ${campo}`);
-        };
-
-        // Processar as datas
-        const dataInicioProcessada = processarData(dataInicio, 'dataInicio');
-        const dataFimProcessada = processarData(dataFim, 'dataFim');
-
-        // BUSCAR CONTRATO PARA VALIDAÇÃO
-        const contratoResult = await client.query(
-            'SELECT * FROM contrato WHERE idcontrato = $1',
-            [idContrato]
-        );
-        
-        if (contratoResult.rows.length === 0) {
-            return res.status(404).json({ 
-                message: 'Contrato não encontrado' 
-            });
-        }
-
-        const contrato = contratoResult.rows[0];
-
-        // VALIDAR SE PODE EDITAR (ajuste conforme seus status)
-        const statusNaoEditaveis = ['finalizado', 'cancelado', 'concluido'];
-        if (statusNaoEditaveis.includes(contrato.status)) {
-            return res.status(400).json({ 
-                message: 'Não é possível editar datas deste contrato' 
-            });
-        }
-
-        // VALIDAÇÕES DE DATAS
-        if (dataInicioProcessada) {
-            const hoje = new Date();
-            hoje.setHours(0, 0, 0, 0);
-            const dataInicioObj = new Date(dataInicioProcessada);
-            
-            if (dataInicioObj < hoje) {
-                return res.status(400).json({ 
-                    message: 'Data início não pode ser anterior à data atual' 
-                });
-            }
-        }
-
-        if (dataFimProcessada && dataInicioProcessada) {
-            const dataInicioObj = new Date(dataInicioProcessada);
-            const dataFimObj = new Date(dataFimProcessada);
-            
-            if (dataFimObj < dataInicioObj) {
-                return res.status(400).json({ 
-                    message: 'Data fim não pode ser anterior à data início' 
-                });
-            }
-        }
-
-        // CONSTRUIR QUERY DE UPDATE
+        // Construir query dinamicamente
         const updates = [];
         const values = [];
         let paramIndex = 1;
         
-        if (dataInicioProcessada !== undefined) {
-            updates.push(`datainicio = $${paramIndex}::DATE`);
-            values.push(dataInicioProcessada);
+        if (dataInicio) {
+            // Aceita string ou número, o PostgreSQL converterá automaticamente
+            updates.push(`datainicio = $${paramIndex}`);
+            values.push(dataInicio);
             paramIndex++;
         }
         
-        if (dataFimProcessada !== undefined) {
-            updates.push(`datafim = $${paramIndex}::DATE`);
-            values.push(dataFimProcessada);
+        if (dataFim) {
+            updates.push(`datafim = $${paramIndex}`);
+            values.push(dataFim);
             paramIndex++;
         }
         
-        // Calcular nova duração se ambas as datas foram fornecidas
-        if (dataInicioProcessada && dataFimProcessada) {
-            const diffTime = Math.abs(
-                new Date(dataFimProcessada) - new Date(dataInicioProcessada)
-            );
-            const novaDuracaoDias = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-            
-            updates.push(`duracao_dias = $${paramIndex}`);
-            values.push(novaDuracaoDias);
-            paramIndex++;
-        }
+        // Sempre atualizar dataatualizacao
+        updates.push(`dataatualizacao = CURRENT_TIMESTAMP`);
         
-        // Adicionar idContrato como último parâmetro
         values.push(idContrato);
         
         const query = `
             UPDATE contrato 
-            SET ${updates.join(', ')}, 
-                atualizado_em = CURRENT_TIMESTAMP
+            SET ${updates.join(', ')}
             WHERE idcontrato = $${paramIndex}
             RETURNING *
         `;
 
-        // EXECUTAR UPDATE
-        const updateResult = await client.query(query, values);
+        console.log('Executando query:', { query, values });
+
+        const result = await client.query(query, values);
         
-        if (updateResult.rows.length === 0) {
-            throw new Error('Falha ao atualizar contrato');
+        if (result.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Contrato não encontrado' 
+            });
         }
 
-        const contratoAtualizado = updateResult.rows[0];
-
-        // RESPOSTA DE SUCESSO
         res.status(200).json({
             success: true,
             message: 'Datas atualizadas com sucesso',
-            data: contratoAtualizado
+            data: result.rows[0]
         });
 
     } catch (error) {
-        console.error('Erro ao atualizar datas:', error);
+        console.error('Erro:', error);
         
-        // Verificar se é erro do PostgreSQL
+        // Mensagem amigável para o erro específico
         if (error.message && error.message.includes('integer')) {
-            return res.status(500).json({ 
-                message: 'Erro: O campo de data recebeu um valor inteiro em vez de uma data. Certifique-se de enviar no formato YYYY-MM-DD',
-                error: error.message 
+            return res.status(400).json({ 
+                success: false,
+                message: 'Formato de data inválido. Envie no formato "YYYY-MM-DD" (exemplo: "2025-12-10")',
+                error: error.message
             });
         }
         
         res.status(500).json({ 
-            message: 'Erro ao atualizar datas do contrato', 
+            success: false,
+            message: 'Erro interno do servidor',
             error: error.message 
         });
     } finally { 
