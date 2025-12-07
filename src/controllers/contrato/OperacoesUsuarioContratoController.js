@@ -1,5 +1,13 @@
 const pool = require('../../connections/SQLConnections.js');
-const { buscarContratoComRelacionamentos, validarStatus } = require('./ContratoController.js');
+/* const { buscarContratoComRelacionamentos, validarStatus } = require('./ContratoController.js'); */
+const { 
+    buscarContratoComRelacionamentos, 
+    validarStatus, 
+    validarDatas, 
+    construirQueryUpdate, 
+    statusNaoEditaveis, 
+    statusMap 
+} = require('./ContratoUtils.js');
 
 const buscarContratosPorUsuario = async (req, res) => {
     let client;
