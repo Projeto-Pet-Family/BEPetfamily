@@ -1,12 +1,4 @@
 const pool = require('../../../connections/SQLConnections.js');
-const { 
-    buscarContratoComRelacionamentos, 
-    validarStatus, 
-    validarDatas, 
-    construirQueryUpdate, 
-    statusNaoEditaveis, 
-    statusMap 
-} = require('../ContratoUtils.js');
 
 const calcularValorContrato = async (req, res) => {
     let client;

@@ -107,80 +107,77 @@ const calcularValoresContratoPorPet = (contrato, pets = []) => {
     };
 };
 
-const buscarContratoComRelacionamentos = async (client, idContrato) => {
+async function buscarContratoComRelacionamentos(idContrato) {
+    let client;
+    
     try {
-        const query = `
-            SELECT c.*, h.nome as hospedagem_nome, h.valor_diaria,
-                   e.idendereco, e.numero as endereco_numero, e.complemento as endereco_complemento,
-                   l.nome as logradouro_nome, b.nome as bairro_nome, ci.nome as cidade_nome,
-                   es.nome as estado_nome, es.sigla as estado_sigla, cep.codigo as cep_codigo,
-                   u.nome as usuario_nome, u.email as usuario_email
-            FROM contrato c
-            LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
-            LEFT JOIN endereco e ON h.idendereco = e.idendereco
-            LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
-            LEFT JOIN bairro b ON l.idbairro = b.idbairro
-            LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
-            LEFT JOIN estado es ON ci.idestado = es.idestado
-            LEFT JOIN cep ON e.idcep = cep.idcep
-            LEFT JOIN usuario u ON c.idusuario = u.idusuario
-            WHERE c.idcontrato = $1`;
-        
-        const contratoResult = await client.query(query, [idContrato]);
-        if (!contratoResult.rows[0]) return null;
-
-        const contrato = contratoResult.rows[0];
-        contrato.hospedagem_endereco = formatarEndereco(contrato);
-
-        const petsResult = await client.query(
-            `SELECT p.* FROM contrato_pet cp 
-             JOIN pet p ON cp.idpet = p.idpet 
-             WHERE cp.idcontrato = $1`, 
-            [idContrato]
-        );
-
-        const servicosResult = await client.query(
-            `SELECT cs.*, s.descricao, s.preco as preco_atual, 
-                    p.nome as pet_nome, p.idpet,
-                    (cs.quantidade * cs.preco_unitario) as subtotal
-             FROM contratoservico cs 
-             JOIN servico s ON cs.idservico = s.idservico
-             LEFT JOIN pet p ON cs.idpet = p.idpet
-             WHERE cs.idcontrato = $1 
-             ORDER BY p.nome, s.descricao`, 
-            [idContrato]
-        );
-
-        const servicosPorPet = {};
-        servicosResult.rows.forEach(servico => {
-            const idPet = servico.idpet;
-            if (!servicosPorPet[idPet]) {
-                servicosPorPet[idPet] = [];
-            }
-            servicosPorPet[idPet].push(servico);
-        });
-
-        contrato.pets = petsResult.rows.map(pet => ({
-            ...pet,
-            servicos: servicosPorPet[pet.idpet] || []
-        }));
-
-        if (contrato.datainicio && contrato.datafim) {
-            const diffTime = Math.abs(new Date(contrato.datafim) - new Date(contrato.datainicio));
-            contrato.duracao_dias = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        } else {
-            contrato.duracao_dias = null;
+        if (!idContrato) {
+            console.log('⚠️ ID do contrato não fornecido');
+            return null;
         }
-
-        contrato.calculo_valores = calcularValoresContratoPorPet(contrato, contrato.pets);
-        contrato.status_descricao = statusMap[contrato.status] || 'Desconhecido';
-
+        
+        client = await pool.connect();
+        
+        console.log(`🔍 Buscando contrato ID ${idContrato}...`);
+        
+        // 1. Buscar informações básicas do contrato
+        const contratoQuery = await client.query(
+            `SELECT c.*, 
+                    h.nome as hospedagem_nome,
+                    h.valor_diaria,
+                    u.nome as usuario_nome
+             FROM contrato c
+             JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+             JOIN usuario u ON c.idusuario = u.idusuario
+             WHERE c.idcontrato = $1`,
+            [idContrato]
+        );
+        
+        if (contratoQuery.rows.length === 0) {
+            console.log('❌ Contrato não encontrado');
+            return null;
+        }
+        
+        const contrato = contratoQuery.rows[0];
+        console.log('✅ Contrato base encontrado');
+        
+        // 2. Buscar pets do contrato
+        const petsQuery = await client.query(
+            `SELECT p.* 
+             FROM contrato_pet cp
+             JOIN pet p ON cp.idpet = p.idpet
+             WHERE cp.idcontrato = $1`,
+            [idContrato]
+        );
+        
+        contrato.pets = petsQuery.rows;
+        console.log(`✅ ${petsQuery.rows.length} pets encontrados`);
+        
+        // 3. Buscar serviços do contrato
+        const servicosQuery = await client.query(
+            `SELECT cs.*, 
+                    s.descricao as servico_descricao,
+                    s.preco as servico_preco_original
+             FROM contratoservico cs
+             JOIN servico s ON cs.idservico = s.idservico
+             WHERE cs.idcontrato = $1`,
+            [idContrato]
+        );
+        
+        contrato.servicos = servicosQuery.rows;
+        console.log(`✅ ${servicosQuery.rows.length} serviços encontrados`);
+        
         return contrato;
+        
     } catch (error) {
-        console.error('Erro ao buscar contrato com relacionamentos:', error);
-        throw error;
+        console.error('❌ Erro ao buscar contrato completo:', error.message);
+        return null;
+    } finally {
+        if (client) {
+            client.release();
+        }
     }
-};
+}
 
 module.exports = {
     statusValidos,
