@@ -12,87 +12,304 @@ const {
 const buscarContratosPorUsuario = async (req, res) => {
     let client;
     try {
-        client = await pool.connect();
         const { idUsuario } = req.params;
         
-        const usuario = await client.query(
-            'SELECT idusuario FROM usuario WHERE idusuario = $1',
-            [idUsuario]
-        );
-        if (usuario.rows.length === 0) {
-            return res.status(404).json({ message: 'Usuário não encontrado' });
+        if (!idUsuario || isNaN(idUsuario)) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'ID do usuário inválido' 
+            });
         }
 
+        client = await pool.connect();
+        
+        console.log(`📋 Listando contratos do usuário ID: ${idUsuario}`);
+
         const query = `
-            SELECT c.*, h.nome as hospedagem_nome, e.numero as endereco_numero,
-                   e.complemento as endereco_complemento, l.nome as logradouro_nome,
-                   b.nome as bairro_nome, ci.nome as cidade_nome, es.nome as estado_nome,
-                   es.sigla as estado_sigla, cep.codigo as cep_codigo
+            SELECT 
+                -- Dados básicos do contrato
+                c.idcontrato,
+                c.idhospedagem,
+                c.idusuario,
+                c.datainicio,
+                c.datafim,
+                c.datacriacao,
+                c.dataatualizacao,
+                COALESCE(c.status, 'em_aprovacao') as status,
+                
+                -- Hospedagem
+                COALESCE(h.nome, 'Hospedagem não informada') as hospedagem_nome,
+                COALESCE(h.valor_diaria, 0) as valor_diaria,
+                
+                -- Endereço da hospedagem
+                e.numero as endereco_numero,
+                e.complemento as endereco_complemento,
+                l.nome as logradouro_nome,
+                b.nome as bairro_nome,
+                ci.nome as cidade_nome,
+                es.nome as estado_nome,
+                es.sigla as estado_sigla,
+                cep.codigo as cep_codigo,
+                
+                -- Usuário
+                COALESCE(u.nome, 'Usuário não informado') as usuario_nome,
+                u.email as usuario_email,
+                u.telefone as usuario_telefone,
+                
+                -- Cálculo de quantidade de dias
+                (CASE 
+                    WHEN c.datafim IS NOT NULL AND c.datainicio IS NOT NULL 
+                    THEN GREATEST(1, (c.datafim::date - c.datainicio::date))
+                    ELSE 1 
+                END) as quantidade_dias,
+                
+                -- Quantidade de pets
+                COALESCE((SELECT COUNT(*) FROM contrato_pet cp WHERE cp.idcontrato = c.idcontrato), 0) as quantidade_pets,
+                
+                -- Valor da hospedagem
+                (CASE 
+                    WHEN COALESCE(h.valor_diaria, 0) > 0
+                    THEN h.valor_diaria * 
+                         (CASE 
+                            WHEN c.datafim IS NOT NULL AND c.datainicio IS NOT NULL 
+                            THEN GREATEST(1, (c.datafim::date - c.datainicio::date))
+                            ELSE 1 
+                         END) *
+                         COALESCE((SELECT COUNT(*) FROM contrato_pet cp WHERE cp.idcontrato = c.idcontrato), 0)
+                    ELSE 0
+                END) as valor_hospedagem,
+                
+                -- Valor dos serviços
+                COALESCE((SELECT SUM(cs.quantidade * cs.preco_unitario) 
+                 FROM contratoservico cs 
+                 WHERE cs.idcontrato = c.idcontrato), 0) as valor_servicos,
+                
+                -- Valor total do contrato
+                ((CASE 
+                    WHEN COALESCE(h.valor_diaria, 0) > 0
+                    THEN h.valor_diaria * 
+                         (CASE 
+                            WHEN c.datafim IS NOT NULL AND c.datainicio IS NOT NULL 
+                            THEN GREATEST(1, (c.datafim::date - c.datainicio::date))
+                            ELSE 1 
+                         END) *
+                         COALESCE((SELECT COUNT(*) FROM contrato_pet cp WHERE cp.idcontrato = c.idcontrato), 0)
+                    ELSE 0
+                END) + 
+                COALESCE((SELECT SUM(cs.quantidade * cs.preco_unitario) 
+                 FROM contratoservico cs 
+                 WHERE cs.idcontrato = c.idcontrato), 0)) as valor_total,
+                
+                -- Pets com serviços aninhados
+                COALESCE(
+                    (SELECT json_agg(
+                        jsonb_build_object(
+                            'idpet', p.idpet,
+                            'nome', COALESCE(p.nome, 'Pet sem nome'),
+                            'sexo', p.sexo,
+                            'nascimento', p.nascimento,
+                            'porte_id', p.idporte,
+                            'especie_id', p.idespecie,
+                            'raca_id', p.idraca,
+                            -- Serviços deste pet
+                            'servicos', COALESCE(
+                                (SELECT json_agg(
+                                    jsonb_build_object(
+                                        'idservico', s.idservico,
+                                        'descricao', s.descricao,
+                                        'quantidade', cs.quantidade,
+                                        'preco_unitario', cs.preco_unitario,
+                                        'preco_total', (cs.quantidade * cs.preco_unitario)
+                                    )
+                                )
+                                FROM contratoservico cs
+                                JOIN servico s ON cs.idservico = s.idservico
+                                WHERE cs.idcontrato = c.idcontrato 
+                                AND cs.idpet = p.idpet),
+                                '[]'::json
+                            ),
+                            -- Valor total dos serviços deste pet
+                            'valor_total_servicos', COALESCE(
+                                (SELECT SUM(cs.quantidade * cs.preco_unitario)
+                                 FROM contratoservico cs
+                                 WHERE cs.idcontrato = c.idcontrato 
+                                 AND cs.idpet = p.idpet),
+                                0
+                            )
+                        )
+                    )
+                    FROM contrato_pet cp
+                    JOIN pet p ON cp.idpet = p.idpet
+                    WHERE cp.idcontrato = c.idcontrato),
+                    '[]'::json
+                ) as pets_com_servicos,
+                
+                -- Serviços gerais (que não estão associados a um pet específico)
+                COALESCE(
+                    (SELECT json_agg(jsonb_build_object(
+                        'idservico', s.idservico,
+                        'descricao', s.descricao,
+                        'quantidade', cs.quantidade,
+                        'preco_unitario', cs.preco_unitario,
+                        'preco_total', (cs.quantidade * cs.preco_unitario)
+                    ))
+                    FROM contratoservico cs
+                    JOIN servico s ON cs.idservico = s.idservico
+                    WHERE cs.idcontrato = c.idcontrato 
+                    AND cs.idpet IS NULL),
+                    '[]'::json
+                ) as servicos_gerais
+
             FROM contrato c
+            
+            -- Hospedagem
             LEFT JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+            
+            -- Endereço
             LEFT JOIN endereco e ON h.idendereco = e.idendereco
             LEFT JOIN logradouro l ON e.idlogradouro = l.idlogradouro
             LEFT JOIN bairro b ON l.idbairro = b.idbairro
             LEFT JOIN cidade ci ON b.idcidade = ci.idcidade
             LEFT JOIN estado es ON ci.idestado = es.idestado
             LEFT JOIN cep ON e.idcep = cep.idcep
+            
+            -- Usuário
+            LEFT JOIN usuario u ON c.idusuario = u.idusuario
+            
             WHERE c.idusuario = $1
-            ORDER BY 
-                CASE 
-                    WHEN c.status = 'em_aprovacao' THEN 1
-                    WHEN c.status = 'aprovado' THEN 2
-                    WHEN c.status = 'em_execucao' THEN 3
-                    WHEN c.status = 'concluido' THEN 4
-                    WHEN c.status = 'negado' THEN 5
-                    WHEN c.status = 'cancelado' THEN 6
-                    ELSE 7
-                END,
-                c.datainicio DESC,
-                c.datacriacao DESC
-        `;
+            
+            GROUP BY 
+                c.idcontrato,
+                h.idhospedagem,
+                h.valor_diaria,
+                e.idendereco,
+                l.idlogradouro,
+                b.idbairro,
+                ci.idcidade,
+                es.idestado,
+                cep.idcep,
+                u.idusuario
+                
+            ORDER BY c.datacriacao DESC, c.idcontrato DESC`;
 
         const result = await client.query(query, [idUsuario]);
         
-        const contratosCompletos = await Promise.all(
-            result.rows.map(contrato => buscarContratoComRelacionamentos(client, contrato.idcontrato))
-        );
+        console.log(`✅ ${result.rows.length} contratos encontrados para o usuário ${idUsuario}`);
 
-        const estatisticas = {
-            total_contratos: contratosCompletos.length,
-            por_status: contratosCompletos.reduce((acc, contrato) => {
-                acc[contrato.status] = (acc[contrato.status] || 0) + 1;
-                return acc;
-            }, {}),
-            valor_total: contratosCompletos.reduce((total, contrato) => 
-                total + (contrato.calculo_valores?.valor_total_contrato || 0), 0
-            ),
-            pets_total: contratosCompletos.reduce((total, contrato) => 
-                total + (contrato.pets?.length || 0), 0
-            ),
-            servicos_total: contratosCompletos.reduce((total, contrato) => {
-                if (contrato.calculo_valores?.servicos_por_pet) {
-                    return total + Object.values(contrato.calculo_valores.servicos_por_pet).reduce((sum, pet) => 
-                        sum + pet.quantidadeServicos, 0);
-                }
-                return total;
-            }, 0)
+        // Função auxiliar para formatar valores monetários
+        const formatarMoeda = (valor) => {
+            const num = parseFloat(valor) || 0;
+            return `R$ ${num.toFixed(2).replace('.', ',')}`;
         };
 
-        res.status(200).json({
-            contratos: contratosCompletos,
-            estatisticas: estatisticas,
-            usuario: {
-                id: idUsuario,
-                total_contratos: estatisticas.total_contratos
+        // Função auxiliar para formatar números
+        const formatarNumero = (valor) => {
+            return parseFloat(valor) || 0;
+        };
+
+        // Formatar os dados para resposta
+        const contratosFormatados = result.rows.map(contrato => {
+            // Calcular status de pagamento baseado no status do contrato
+            let statusPagamento = 'pendente';
+            const statusContrato = contrato.status || 'em_aprovacao';
+            
+            switch (statusContrato) {
+                case 'concluido':
+                    statusPagamento = 'concluido';
+                    break;
+                case 'cancelado':
+                case 'negado':
+                    statusPagamento = 'cancelado';
+                    break;
+                case 'em_aprovacao':
+                    statusPagamento = 'em_aprovacao';
+                    break;
+                case 'aprovado':
+                    statusPagamento = 'aprovado';
+                    break;
+                case 'em_execucao':
+                    statusPagamento = 'em_execucao';
+                    break;
+                default:
+                    statusPagamento = 'pendente';
             }
+
+            const valorDiaria = formatarNumero(contrato.valor_diaria);
+            const valorHospedagem = formatarNumero(contrato.valor_hospedagem);
+            const valorServicos = formatarNumero(contrato.valor_servicos);
+            const valorTotal = formatarNumero(contrato.valor_total);
+            const quantidadeDias = formatarNumero(contrato.quantidade_dias);
+            const quantidadePets = formatarNumero(contrato.quantidade_pets);
+
+            return {
+                id: contrato.idcontrato,
+                hospedagem: {
+                    id: contrato.idhospedagem,
+                    nome: contrato.hospedagem_nome,
+                    valorDiaria: valorDiaria,
+                    endereco: {
+                        numero: contrato.endereco_numero,
+                        complemento: contrato.endereco_complemento,
+                        logradouro: contrato.logradouro_nome,
+                        bairro: contrato.bairro_nome,
+                        cidade: contrato.cidade_nome,
+                        estado: contrato.estado_nome,
+                        sigla: contrato.estado_sigla,
+                        cep: contrato.cep_codigo
+                    }
+                },
+                usuario: {
+                    id: contrato.idusuario,
+                    nome: contrato.usuario_nome,
+                    email: contrato.usuario_email,
+                    telefone: contrato.usuario_telefone
+                },
+                datas: {
+                    inicio: contrato.datainicio,
+                    fim: contrato.datafim,
+                    criacao: contrato.datacriacao,
+                    atualizacao: contrato.dataatualizacao
+                },
+                calculos: {
+                    quantidadeDias: quantidadeDias,
+                    quantidadePets: quantidadePets,
+                    valorHospedagem: valorHospedagem,
+                    valorServicos: valorServicos,
+                    valorTotal: valorTotal
+                },
+                status: {
+                    contrato: statusContrato,
+                    pagamento: statusPagamento
+                },
+                pets: contrato.pets_com_servicos || [],
+                servicosGerais: contrato.servicos_gerais || [],
+                // Campos formatados para exibição
+                formatado: {
+                    periodo: `${quantidadeDias} dia(s)`,
+                    pets: `${quantidadePets} pet(s)`,
+                    valorDiaria: formatarMoeda(valorDiaria),
+                    valorHospedagem: formatarMoeda(valorHospedagem),
+                    valorServicos: formatarMoeda(valorServicos),
+                    valorTotal: formatarMoeda(valorTotal)
+                }
+            };
         });
+
+        res.status(200).json({
+            success: true,
+            count: contratosFormatados.length,
+            data: contratosFormatados
+        });
+
     } catch (error) {
+        console.error('❌ Erro ao listar contratos do usuário:', error);
         res.status(500).json({ 
+            success: false,
             message: 'Erro ao buscar contratos do usuário', 
             error: error.message 
         });
-    } finally {
-        if (client) await client.release();
+    } finally { 
+        if (client) client.release(); 
     }
 };
 
