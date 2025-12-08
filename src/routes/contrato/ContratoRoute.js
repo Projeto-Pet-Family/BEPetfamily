@@ -16,7 +16,7 @@ router.get('/contrato/usuario/:idUsuario/status', contratoController.buscarContr
 // Rotas de serviços
 router.get('/contrato/:idContrato/servico', contratoController.lerServicosExistentesContrato);
 router.post('/contrato/:idContrato/servico', contratoController.adicionarServicoContrato);
-router.delete('/contrato/:idContrato/servico/:idServico', contratoController.excluirServicoContrato);
+router.delete('/contrato/:idContrato/servico', contratoController.excluirServicoContrato);
 
 // Rotas de pets
 router.get('/contrato/:idContrato/pet', contratoController.lerPetsExistentesContrato);

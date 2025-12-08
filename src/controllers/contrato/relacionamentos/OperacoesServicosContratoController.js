@@ -17,11 +17,16 @@ const adicionarServicoContrato = async (req, res) => {
         const { idContrato } = req.params;
         const { servicosPorPet } = req.body;
 
+        // Validação básica
         if (!servicosPorPet || !Array.isArray(servicosPorPet) || servicosPorPet.length === 0) {
             await client.query('ROLLBACK');
-            return res.status(400).json({ message: 'Lista de serviços por pet é obrigatória' });
+            return res.status(400).json({ 
+                success: false,
+                message: 'Lista de serviços por pet é obrigatória e deve ser um array não vazio' 
+            });
         }
 
+        // Validar formato para cada item
         const formatoValido = servicosPorPet.every(item => 
             item.idPet && 
             item.servicos && 
@@ -32,35 +37,47 @@ const adicionarServicoContrato = async (req, res) => {
         if (!formatoValido) {
             await client.query('ROLLBACK');
             return res.status(400).json({ 
-                message: 'Formato inválido. Use: [{idPet: 1, servicos: [1, 2, 3]}, ...]' 
+                success: false,
+                message: 'Formato inválido. Cada item deve ter: {idPet: number, servicos: [idServico, ...]}' 
             });
         }
 
+        // Verificar duplicidade de pets na requisição
         const petsIds = servicosPorPet.map(item => item.idPet);
         const petsUnicos = [...new Set(petsIds)];
         if (petsUnicos.length !== servicosPorPet.length) {
             await client.query('ROLLBACK');
             return res.status(400).json({ 
+                success: false,
                 message: 'Não é permitido adicionar serviços para o mesmo pet múltiplas vezes na mesma requisição' 
             });
         }
 
+        // Buscar contrato e validar status
         const contrato = await client.query(
-            'SELECT c.*, h.valor_diaria FROM contrato c JOIN hospedagem h ON c.idhospedagem = h.idhospedagem WHERE c.idcontrato = $1',
+            'SELECT c.*, h.idhospedagem FROM contrato c JOIN hospedagem h ON c.idhospedagem = h.idhospedagem WHERE c.idcontrato = $1',
             [idContrato]
         );
+        
         if (contrato.rows.length === 0) {
             await client.query('ROLLBACK');
-            return res.status(404).json({ message: 'Contrato não encontrado' });
-        }
-
-        if (statusNaoEditaveis.includes(contrato.rows[0].status)) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ 
-                message: `Não é possível adicionar serviços a um contrato com status "${statusMap[contrato.rows[0].status]}"`
+            return res.status(404).json({ 
+                success: false,
+                message: 'Contrato não encontrado' 
             });
         }
 
+        const contratoData = contrato.rows[0];
+        
+        if (statusNaoEditaveis.includes(contratoData.status)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ 
+                success: false,
+                message: `Não é possível adicionar serviços a um contrato com status "${statusMap[contratoData.status]}"`
+            });
+        }
+
+        // Verificar se os pets pertencem ao contrato
         const contratoPets = await client.query(
             'SELECT idpet FROM contrato_pet WHERE idcontrato = $1 AND idpet = ANY($2)',
             [idContrato, petsIds]
@@ -72,23 +89,29 @@ const adicionarServicoContrato = async (req, res) => {
             const petsInvalidos = petsIds.filter(id => !petsValidosIds.includes(id));
             
             return res.status(400).json({ 
+                success: false,
                 message: 'Um ou mais pets não pertencem a este contrato',
                 petsInvalidos: petsInvalidos
             });
         }
 
+        // Coletar todos os IDs de serviços
         const todosServicosIds = servicosPorPet.flatMap(item => item.servicos);
+        const servicosUnicos = [...new Set(todosServicosIds)];
         
+        // Validar serviços duplicados para cada pet
         for (const item of servicosPorPet) {
-            const servicosUnicos = [...new Set(item.servicos)];
-            if (servicosUnicos.length !== item.servicos.length) {
+            const servicosDoPet = [...new Set(item.servicos)];
+            if (servicosDoPet.length !== item.servicos.length) {
                 await client.query('ROLLBACK');
                 return res.status(400).json({ 
+                    success: false,
                     message: `Não é permitido adicionar o mesmo serviço múltiplas vezes para o pet ${item.idPet}` 
                 });
             }
         }
 
+        // Verificar se serviços já existem para cada pet
         for (const item of servicosPorPet) {
             const servicosExistentes = await client.query(
                 `SELECT cs.idservico 
@@ -103,6 +126,7 @@ const adicionarServicoContrato = async (req, res) => {
                 await client.query('ROLLBACK');
                 const servicosExistentesIds = servicosExistentes.rows.map(s => s.idservico);
                 return res.status(400).json({ 
+                    success: false,
                     message: `Um ou mais serviços já estão vinculados a este contrato para o pet ${item.idPet}`,
                     pet: item.idPet,
                     servicosExistentes: servicosExistentesIds
@@ -110,69 +134,104 @@ const adicionarServicoContrato = async (req, res) => {
             }
         }
 
+        // Verificar se serviços estão disponíveis na hospedagem
         const servicosValidos = await client.query(
-            'SELECT idservico, preco FROM servico WHERE idservico = ANY($1) AND idhospedagem = $2 AND ativo = true',
-            [todosServicosIds, contrato.rows[0].idhospedagem]
+            'SELECT idservico, descricao, preco FROM servico WHERE idservico = ANY($1) AND idhospedagem = $2 AND ativo = true',
+            [servicosUnicos, contratoData.idhospedagem]
         );
 
-        if (servicosValidos.rows.length !== todosServicosIds.length) {
+        if (servicosValidos.rows.length !== servicosUnicos.length) {
             await client.query('ROLLBACK');
             const servicosValidosIds = servicosValidos.rows.map(s => s.idservico);
-            const servicosInvalidos = todosServicosIds.filter(id => !servicosValidosIds.includes(id));
+            const servicosInvalidos = servicosUnicos.filter(id => !servicosValidosIds.includes(id));
             
             return res.status(400).json({ 
+                success: false,
                 message: 'Um ou mais serviços não estão disponíveis para esta hospedagem',
                 servicosInvalidos: servicosInvalidos
             });
         }
 
+        // Preparar para inserir múltiplos serviços
         const servicosInseridos = [];
+        const valoresInsercao = [];
+        const placeholders = [];
         
+        let placeholderIndex = 1;
         for (const item of servicosPorPet) {
-            const { idPet, servicos: servicosIds } = item;
-            
-            for (const idServico of servicosIds) {
+            for (const idServico of item.servicos) {
                 const servicoInfo = servicosValidos.rows.find(s => s.idservico === idServico);
-                const precoUnitario = servicoInfo.preco;
-                const quantidade = 1;
+                valoresInsercao.push(idContrato, idServico, item.idPet, 1, servicoInfo.preco);
+                placeholders.push(`($${placeholderIndex}, $${placeholderIndex + 1}, $${placeholderIndex + 2}, $${placeholderIndex + 3}, $${placeholderIndex + 4})`);
+                placeholderIndex += 5;
                 
-                const result = await client.query(
-                    `INSERT INTO contratoservico 
-                     (idcontrato, idservico, idpet, quantidade, preco_unitario) 
-                     VALUES ($1, $2, $3, $4, $5) 
-                     RETURNING *`,
-                    [idContrato, idServico, idPet, quantidade, precoUnitario]
-                );
-                servicosInseridos.push(result.rows[0]);
+                servicosInseridos.push({
+                    idServico,
+                    idPet: item.idPet,
+                    descricao: servicoInfo.descricao,
+                    quantidade: 1,
+                    precoUnitario: servicoInfo.preco,
+                    precoTotal: servicoInfo.preco
+                });
             }
         }
 
+        // Inserir todos os serviços de uma vez
+        if (valoresInsercao.length > 0) {
+            await client.query(
+                `INSERT INTO contratoservico 
+                 (idcontrato, idservico, idpet, quantidade, preco_unitario) 
+                 VALUES ${placeholders.join(', ')}`,
+                valoresInsercao
+            );
+        }
+
         await client.query('COMMIT');
-        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
+
+        // Buscar contrato atualizado
+        const contratoCompleto = await buscarContratoComRelacionamentos(idContrato);
         
-        const valorServicosAdicional = servicosInseridos.reduce((sum, s) => sum + (s.preco_unitario * s.quantidade), 0);
+        // Calcular valor total adicional
+        const valorServicosAdicional = servicosInseridos.reduce((sum, s) => sum + s.precoTotal, 0);
         
+        // Agrupar serviços por pet para resposta
         const servicosPorPetAgrupados = {};
         servicosInseridos.forEach(servico => {
-            if (!servicosPorPetAgrupados[servico.idpet]) {
-                servicosPorPetAgrupados[servico.idpet] = [];
+            if (!servicosPorPetAgrupados[servico.idPet]) {
+                servicosPorPetAgrupados[servico.idPet] = {
+                    idPet: servico.idPet,
+                    servicos: []
+                };
             }
-            servicosPorPetAgrupados[servico.idpet].push(servico);
+            servicosPorPetAgrupados[servico.idPet].servicos.push({
+                idServico: servico.idServico,
+                descricao: servico.descricao,
+                quantidade: servico.quantidade,
+                precoUnitario: servico.precoUnitario,
+                precoTotal: servico.precoTotal
+            });
         });
-        
+
         res.status(200).json({
+            success: true,
             message: 'Serviço(s) adicionado(s) com sucesso',
-            servicosAdicionados: servicosPorPetAgrupados,
-            data: contratoCompleto,
-            atualizacao_valores: {
-                valor_servicos_adicional: valorServicosAdicional,
-                valor_total_atualizado: contratoCompleto.calculo_valores.valor_total_contrato
-            }
+            servicosAdicionados: Object.values(servicosPorPetAgrupados),
+            resumo: {
+                totalServicosAdicionados: servicosInseridos.length,
+                totalPetsAfetados: Object.keys(servicosPorPetAgrupados).length,
+                valorTotalAdicionado: valorServicosAdicional
+            },
+            data: contratoCompleto
         });
+
     } catch (error) {
         if (client) await client.query('ROLLBACK');
-        console.error('Erro detalhado:', error);
-        res.status(500).json({ message: 'Erro ao adicionar serviço ao contrato', error: error.message });
+        console.error('Erro ao adicionar serviço ao contrato:', error);
+        res.status(500).json({ 
+            success: false,
+            message: 'Erro ao adicionar serviço ao contrato', 
+            error: error.message 
+        });
     } finally { 
         if (client) client.release(); 
     }
@@ -182,67 +241,195 @@ const excluirServicoContrato = async (req, res) => {
     let client;
     try {
         client = await pool.connect();
-        const { idContrato, idServico, idPet } = req.params;
-
-        const servicoQuery = `
-            SELECT cs.*, s.descricao, p.nome as pet_nome 
-            FROM contratoservico cs 
-            JOIN servico s ON cs.idservico = s.idservico
-            LEFT JOIN pet p ON cs.idpet = p.idpet
-            WHERE cs.idcontrato = $1 
-            AND cs.idservico = $2 
-            AND cs.idpet = $3
-        `;
-
-        const servicoResult = await client.query(servicoQuery, [idContrato, idServico, idPet]);
+        await client.query('BEGIN');
         
-        if (servicoResult.rows.length === 0) {
-            return res.status(404).json({ 
-                message: 'Serviço não encontrado para este pet no contrato',
-                detalhes: 'Verifique se o serviço está vinculado ao pet especificado'
-            });
-        }
+        const { idContrato } = req.params;
+        const { servicosPorPet } = req.body; // Mesmo formato do adicionar: [{idPet: X, servicos: [Y, Z, ...]}, ...]
 
-        const contrato = await client.query('SELECT status FROM contrato WHERE idcontrato = $1', [idContrato]);
-        if (contrato.rows.length === 0) {
-            return res.status(404).json({ message: 'Contrato não encontrado' });
-        }
-
-        if (statusNaoEditaveis.includes(contrato.rows[0].status)) {
+        // Validação básica
+        if (!servicosPorPet || !Array.isArray(servicosPorPet) || servicosPorPet.length === 0) {
+            await client.query('ROLLBACK');
             return res.status(400).json({ 
-                message: `Não é possível remover serviços de um contrato com status "${statusMap[contrato.rows[0].status]}"`
+                success: false,
+                message: 'Lista de serviços por pet é obrigatória e deve ser um array não vazio' 
             });
         }
 
-        const valorRemovido = servicoResult.rows[0].quantidade * servicoResult.rows[0].preco_unitario;
-
-        const deleteResult = await client.query(
-            'DELETE FROM contratoservico WHERE idcontrato = $1 AND idservico = $2 AND idpet = $3 RETURNING *',
-            [idContrato, idServico, idPet]
+        // Validar formato para cada item
+        const formatoValido = servicosPorPet.every(item => 
+            item.idPet && 
+            item.servicos && 
+            Array.isArray(item.servicos) && 
+            item.servicos.length > 0
         );
 
-        const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
+        if (!formatoValido) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ 
+                success: false,
+                message: 'Formato inválido. Cada item deve ter: {idPet: number, servicos: [idServico, ...]}' 
+            });
+        }
+
+        // Verificar duplicidade de pets na requisição
+        const petsIds = servicosPorPet.map(item => item.idPet);
+        const petsUnicos = [...new Set(petsIds)];
+        if (petsUnicos.length !== servicosPorPet.length) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ 
+                success: false,
+                message: 'Não é permitido excluir serviços para o mesmo pet múltiplas vezes na mesma requisição' 
+            });
+        }
+
+        // Buscar contrato e validar status
+        const contrato = await client.query('SELECT * FROM contrato WHERE idcontrato = $1', [idContrato]);
+        
+        if (contrato.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ 
+                success: false,
+                message: 'Contrato não encontrado' 
+            });
+        }
+
+        const contratoData = contrato.rows[0];
+        
+        if (statusNaoEditaveis.includes(contratoData.status)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ 
+                success: false,
+                message: `Não é possível remover serviços de um contrato com status "${statusMap[contratoData.status]}"`
+            });
+        }
+
+        // Verificar existência dos serviços e coletar dados para exclusão
+        const servicosExcluidos = [];
+        const servicosNaoEncontrados = [];
+        
+        for (const item of servicosPorPet) {
+            const { idPet, servicos: servicosIds } = item;
+            
+            // Validar serviços duplicados na requisição para este pet
+            const servicosUnicos = [...new Set(servicosIds)];
+            if (servicosUnicos.length !== servicosIds.length) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ 
+                    success: false,
+                    message: `Não é permitido tentar excluir o mesmo serviço múltiplas vezes para o pet ${idPet}` 
+                });
+            }
+            
+            // Verificar cada serviço deste pet
+            for (const idServico of servicosIds) {
+                const servicoExistente = await client.query(
+                    `SELECT cs.*, s.descricao, p.nome as pet_nome 
+                     FROM contratoservico cs 
+                     JOIN servico s ON cs.idservico = s.idservico
+                     LEFT JOIN pet p ON cs.idpet = p.idpet
+                     WHERE cs.idcontrato = $1 
+                     AND cs.idservico = $2 
+                     AND cs.idpet = $3`,
+                    [idContrato, idServico, idPet]
+                );
+
+                if (servicoExistente.rows.length === 0) {
+                    servicosNaoEncontrados.push({
+                        idPet,
+                        idServico
+                    });
+                } else {
+                    servicosExcluidos.push({
+                        ...servicoExistente.rows[0],
+                        precoTotal: servicoExistente.rows[0].quantidade * servicoExistente.rows[0].preco_unitario
+                    });
+                }
+            }
+        }
+
+        // Se algum serviço não foi encontrado
+        if (servicosNaoEncontrados.length > 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ 
+                success: false,
+                message: 'Alguns serviços não foram encontrados',
+                servicosNaoEncontrados: servicosNaoEncontrados,
+                detalhes: 'Verifique se os serviços estão vinculados aos pets especificados'
+            });
+        }
+
+        // Excluir todos os serviços
+        for (const item of servicosPorPet) {
+            const { idPet, servicos: servicosIds } = item;
+            
+            if (servicosIds.length > 0) {
+                await client.query(
+                    `DELETE FROM contratoservico 
+                     WHERE idcontrato = $1 
+                     AND idpet = $2 
+                     AND idservico = ANY($3)`,
+                    [idContrato, idPet, servicosIds]
+                );
+            }
+        }
+
+        await client.query('COMMIT');
+
+        // Buscar contrato atualizado
+        const contratoCompleto = await buscarContratoComRelacionamentos(idContrato);
+        
+        // Calcular valor total removido
+        const valorTotalRemovido = servicosExcluidos.reduce((sum, s) => sum + s.precoTotal, 0);
+        
+        // Agrupar serviços excluídos por pet
+        const servicosPorPetAgrupados = {};
+        servicosExcluidos.forEach(servico => {
+            if (!servicosPorPetAgrupados[servico.idpet]) {
+                servicosPorPetAgrupados[servico.idpet] = {
+                    idPet: servico.idpet,
+                    petNome: servico.pet_nome,
+                    servicos: []
+                };
+            }
+            servicosPorPetAgrupados[servico.idpet].servicos.push({
+                idServico: servico.idservico,
+                descricao: servico.descricao,
+                quantidade: servico.quantidade,
+                precoUnitario: servico.preco_unitario,
+                precoTotal: servico.precoTotal
+            });
+        });
 
         res.status(200).json({
-            message: 'Serviço removido do contrato com sucesso',
-            servicoExcluido: { 
-                ...deleteResult.rows[0], 
-                descricao: servicoResult.rows[0].descricao,
-                pet_nome: servicoResult.rows[0].pet_nome
-            },
-            impacto_financeiro: {
-                valor_removido: valorRemovido,
-                valor_total_atualizado: contratoCompleto.calculo_valores.valor_total_contrato
+            success: true,
+            message: 'Serviço(s) removido(s) do contrato com sucesso',
+            servicosExcluidos: Object.values(servicosPorPetAgrupados),
+            resumo: {
+                totalServicosRemovidos: servicosExcluidos.length,
+                totalPetsAfetados: Object.keys(servicosPorPetAgrupados).length,
+                valorTotalRemovido: valorTotalRemovido,
+                valorTotalAtualizado: contratoCompleto.calculo_valores?.valor_total_contrato || 0
             },
             data: contratoCompleto
         });
+
     } catch (error) {
+        if (client) await client.query('ROLLBACK');
+        console.error('Erro ao excluir serviço do contrato:', error);
+        
         const statusCode = error.code === '23503' ? 400 : 500;
         const message = error.code === '23503' 
             ? 'Não é possível excluir o serviço pois está vinculado a outros registros'
             : 'Erro ao excluir serviço do contrato';
-        res.status(statusCode).json({ message, error: error.message });
-    } finally { if (client) client.release(); }
+        
+        res.status(statusCode).json({ 
+            success: false,
+            message, 
+            error: error.message 
+        });
+    } finally { 
+        if (client) client.release(); 
+    }
 };
 
 const lerServicosExistentesContrato = async (req, res) => {
@@ -261,6 +448,7 @@ const lerServicosExistentesContrato = async (req, res) => {
 
         if (contratoResult.rows.length === 0) {
             return res.status(404).json({ 
+                success: false,
                 message: 'Contrato não encontrado',
                 error: 'CONTRATO_NAO_ENCONTRADO'
             });
@@ -269,16 +457,36 @@ const lerServicosExistentesContrato = async (req, res) => {
         const contrato = contratoResult.rows[0];
         const idHospedagem = contrato.idhospedagem;
 
+        // Buscar pets do contrato com seus serviços
         const petsQuery = `
-            SELECT p.idpet, p.nome as pet_nome
+            SELECT 
+                p.idpet, 
+                p.nome as pet_nome,
+                COALESCE(
+                    (SELECT json_agg(
+                        jsonb_build_object(
+                            'idServico', cs.idservico,
+                            'descricao', s.descricao,
+                            'quantidade', cs.quantidade,
+                            'precoUnitario', cs.preco_unitario,
+                            'precoTotal', (cs.quantidade * cs.preco_unitario)
+                        )
+                    )
+                    FROM contratoservico cs
+                    JOIN servico s ON cs.idservico = s.idservico
+                    WHERE cs.idcontrato = $1 AND cs.idpet = p.idpet),
+                    '[]'::json
+                ) as servicos_adicionados
             FROM contrato_pet cp
             JOIN pet p ON cp.idpet = p.idpet
             WHERE cp.idcontrato = $1
             ORDER BY p.nome
         `;
+        
         const petsResult = await client.query(petsQuery, [idContrato]);
         const pets = petsResult.rows;
 
+        // Buscar todos os serviços disponíveis na hospedagem
         const servicosQuery = `
             SELECT 
                 s.idservico,
@@ -291,49 +499,84 @@ const lerServicosExistentesContrato = async (req, res) => {
         `;
 
         const servicosResult = await client.query(servicosQuery, [idHospedagem]);
-        
+        const todosServicos = servicosResult.rows;
+
+        // Formatando a resposta
         const servicosPorPet = {};
         
         for (const pet of pets) {
-            const servicosDoPet = await client.query(
-                `SELECT cs.idservico 
-                 FROM contratoservico cs 
-                 WHERE cs.idcontrato = $1 AND cs.idpet = $2`,
-                [idContrato, pet.idpet]
-            );
-            
-            const servicosDoPetIds = servicosDoPet.rows.map(s => s.idservico);
+            const servicosAdicionados = pet.servicos_adicionados || [];
+            const servicosAdicionadosIds = servicosAdicionados.map(s => s.idServico);
             
             servicosPorPet[pet.idpet] = {
                 idPet: pet.idpet,
                 nome: pet.pet_nome,
-                servicos: servicosResult.rows.map(servico => ({
+                servicosAdicionados: servicosAdicionados,
+                servicosDisponiveis: todosServicos.map(servico => ({
                     idServico: servico.idservico,
                     descricao: servico.descricao,
                     precoAtual: parseFloat(servico.preco_atual || 0),
                     ativo: servico.ativo,
-                    jaAdicionado: servicosDoPetIds.includes(servico.idservico)
+                    jaAdicionado: servicosAdicionadosIds.includes(servico.idservico)
                 }))
             };
         }
 
+        // Serviços gerais (não associados a pets)
+        const servicosGeraisQuery = `
+            SELECT 
+                cs.idservico,
+                s.descricao,
+                cs.quantidade,
+                cs.preco_unitario,
+                (cs.quantidade * cs.preco_unitario) as preco_total
+            FROM contratoservico cs
+            JOIN servico s ON cs.idservico = s.idservico
+            WHERE cs.idcontrato = $1 AND cs.idpet IS NULL
+            ORDER BY s.descricao
+        `;
+
+        const servicosGeraisResult = await client.query(servicosGeraisQuery, [idContrato]);
+
         res.status(200).json({
+            success: true,
             message: 'Serviços da hospedagem listados por pet',
             data: {
                 contrato: {
-                    id: contrato.idcontrato
+                    id: contrato.idcontrato,
+                    hospedagem: {
+                        id: contrato.idhospedagem,
+                        nome: contrato.hospedagem_nome || 'Não informado'
+                    }
                 },
-                hospedagem: {
-                    id: contrato.idhospedagem,
-                    nome: contrato.hospedagem_nome || 'Não informado'
-                },
-                servicosPorPet: servicosPorPet
+                pets: pets.map(pet => ({
+                    idPet: pet.idpet,
+                    nome: pet.pet_nome,
+                    totalServicosAdicionados: (pet.servicos_adicionados || []).length,
+                    valorTotalServicos: (pet.servicos_adicionados || []).reduce((sum, s) => sum + s.precoTotal, 0)
+                })),
+                servicosPorPet: servicosPorPet,
+                servicosGerais: servicosGeraisResult.rows.map(servico => ({
+                    idServico: servico.idservico,
+                    descricao: servico.descricao,
+                    quantidade: servico.quantidade,
+                    precoUnitario: servico.preco_unitario,
+                    precoTotal: servico.preco_total
+                })),
+                resumo: {
+                    totalPets: pets.length,
+                    totalServicosDisponiveis: todosServicos.length,
+                    totalServicosAdicionados: Object.values(servicosPorPet).reduce(
+                        (sum, pet) => sum + pet.servicosAdicionados.length, 0
+                    ) + servicosGeraisResult.rows.length
+                }
             }
         });
 
     } catch (error) {
         console.error('Erro ao ler serviços do contrato:', error);
         res.status(500).json({ 
+            success: false,
             message: 'Erro ao listar serviços do contrato', 
             error: error.message,
             errorCode: error.code 
