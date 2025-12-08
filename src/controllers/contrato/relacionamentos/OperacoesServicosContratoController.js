@@ -438,13 +438,23 @@ const lerServicosExistentesContrato = async (req, res) => {
         client = await pool.connect();
         const { idContrato } = req.params;
 
-        const contratoResult = await client.query(
-            `SELECT c.idcontrato, h.idhospedagem, h.nome as hospedagem_nome
-             FROM contrato c
-             JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
-             WHERE c.idcontrato = $1`,
-            [idContrato]
-        );
+        // 1. Buscar informações básicas do contrato
+        const contratoQuery = `
+            SELECT 
+                c.idcontrato,
+                c.idhospedagem,
+                c.idusuario,
+                c.datainicio,
+                c.datafim,
+                c.status,
+                h.nome as hospedagem_nome,
+                h.valor_diaria
+            FROM contrato c
+            JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+            WHERE c.idcontrato = $1
+        `;
+
+        const contratoResult = await client.query(contratoQuery, [idContrato]);
 
         if (contratoResult.rows.length === 0) {
             return res.status(404).json({ 
@@ -457,28 +467,21 @@ const lerServicosExistentesContrato = async (req, res) => {
         const contrato = contratoResult.rows[0];
         const idHospedagem = contrato.idhospedagem;
 
-        // Buscar pets do contrato com seus serviços
+        // 2. Buscar todos os pets do contrato
         const petsQuery = `
             SELECT 
-                p.idpet, 
+                p.idpet,
                 p.nome as pet_nome,
-                COALESCE(
-                    (SELECT json_agg(
-                        jsonb_build_object(
-                            'idServico', cs.idservico,
-                            'descricao', s.descricao,
-                            'quantidade', cs.quantidade,
-                            'precoUnitario', cs.preco_unitario,
-                            'precoTotal', (cs.quantidade * cs.preco_unitario)
-                        )
-                    )
-                    FROM contratoservico cs
-                    JOIN servico s ON cs.idservico = s.idservico
-                    WHERE cs.idcontrato = $1 AND cs.idpet = p.idpet),
-                    '[]'::json
-                ) as servicos_adicionados
+                p.sexo,
+                p.nascimento,
+                port.descricao as porte,
+                rac.descricao as raca,
+                esp.descricao as especie
             FROM contrato_pet cp
             JOIN pet p ON cp.idpet = p.idpet
+            LEFT JOIN porte port ON p.idporte = port.idporte
+            LEFT JOIN raca rac ON p.idraca = rac.idraca
+            LEFT JOIN especie esp ON p.idespecie = esp.idespecie
             WHERE cp.idcontrato = $1
             ORDER BY p.nome
         `;
@@ -486,89 +489,179 @@ const lerServicosExistentesContrato = async (req, res) => {
         const petsResult = await client.query(petsQuery, [idContrato]);
         const pets = petsResult.rows;
 
-        // Buscar todos os serviços disponíveis na hospedagem
+        // 3. Buscar todos os serviços do contrato com pet info
         const servicosQuery = `
+            SELECT 
+                cs.idservico,
+                cs.idpet,
+                cs.quantidade,
+                cs.preco_unitario,
+                (cs.quantidade * cs.preco_unitario) as preco_total,
+                s.descricao,
+                s.preco as preco_atual,
+                s.ativo,
+                s.duracao,
+                p.nome as pet_nome,
+                port.descricao as pet_porte,
+                rac.descricao as pet_raca,
+                esp.descricao as pet_especie
+            FROM contratoservico cs
+            JOIN servico s ON cs.idservico = s.idservico
+            LEFT JOIN pet p ON cs.idpet = p.idpet
+            LEFT JOIN porte port ON p.idporte = port.idporte
+            LEFT JOIN raca rac ON p.idraca = rac.idraca
+            LEFT JOIN especie esp ON p.idespecie = esp.idespecie
+            WHERE cs.idcontrato = $1
+            ORDER BY 
+                CASE WHEN cs.idpet IS NULL THEN 0 ELSE 1 END,
+                p.nome,
+                s.descricao
+        `;
+
+        const servicosResult = await client.query(servicosQuery, [idContrato]);
+        const todosServicosContrato = servicosResult.rows;
+
+        // 4. Buscar todos os serviços disponíveis na hospedagem
+        const servicosDisponiveisQuery = `
             SELECT 
                 s.idservico,
                 s.descricao,
-                s.preco as preco_atual,
-                s.ativo
+                s.preco,
+                s.ativo,
+                s.duracao
             FROM servico s
             WHERE s.idhospedagem = $1
-            ORDER BY s.descricao ASC
-        `;
-
-        const servicosResult = await client.query(servicosQuery, [idHospedagem]);
-        const todosServicos = servicosResult.rows;
-
-        // Formatando a resposta
-        const servicosPorPet = {};
-        
-        for (const pet of pets) {
-            const servicosAdicionados = pet.servicos_adicionados || [];
-            const servicosAdicionadosIds = servicosAdicionados.map(s => s.idServico);
-            
-            servicosPorPet[pet.idpet] = {
-                idPet: pet.idpet,
-                nome: pet.pet_nome,
-                servicosAdicionados: servicosAdicionados,
-                servicosDisponiveis: todosServicos.map(servico => ({
-                    idServico: servico.idservico,
-                    descricao: servico.descricao,
-                    precoAtual: parseFloat(servico.preco_atual || 0),
-                    ativo: servico.ativo,
-                    jaAdicionado: servicosAdicionadosIds.includes(servico.idservico)
-                }))
-            };
-        }
-
-        // Serviços gerais (não associados a pets)
-        const servicosGeraisQuery = `
-            SELECT 
-                cs.idservico,
-                s.descricao,
-                cs.quantidade,
-                cs.preco_unitario,
-                (cs.quantidade * cs.preco_unitario) as preco_total
-            FROM contratoservico cs
-            JOIN servico s ON cs.idservico = s.idservico
-            WHERE cs.idcontrato = $1 AND cs.idpet IS NULL
             ORDER BY s.descricao
         `;
 
-        const servicosGeraisResult = await client.query(servicosGeraisQuery, [idContrato]);
+        const servicosDisponiveisResult = await client.query(servicosDisponiveisQuery, [idHospedagem]);
+        const servicosDisponiveis = servicosDisponiveisResult.rows;
 
+        // 5. Organizar os dados
+        const servicosGerais = [];
+        const petsMap = {};
+
+        // Inicializar mapa de pets
+        for (const pet of pets) {
+            petsMap[pet.idpet] = {
+                idPet: pet.idpet,
+                nome: pet.pet_nome,
+                sexo: pet.sexo,
+                nascimento: pet.nascimento,
+                porte: pet.porte,
+                raca: pet.raca,
+                especie: pet.especie,
+                servicos: []
+            };
+        }
+
+        // Processar cada serviço
+        for (const servico of todosServicosContrato) {
+            const precoUnitario = parseFloat(servico.preco_unitario || 0);
+            const quantidade = servico.quantidade || 1;
+            const precoTotal = parseFloat(servico.preco_total || precoUnitario * quantidade);
+            
+            const servicoFormatado = {
+                idservico: servico.idservico,
+                descricao: servico.descricao,
+                quantidade: quantidade,
+                precoUnitario: precoUnitario,
+                precoTotal: precoTotal,
+                precoAtual: parseFloat(servico.preco_atual || 0),
+                ativo: servico.ativo,
+                duracao: servico.duracao,
+                idpet: servico.idpet,
+                petNome: servico.pet_nome,
+                petPorte: servico.pet_porte,
+                petRaca: servico.pet_raca,
+                petEspecie: servico.pet_especie
+            };
+
+            if (servico.idpet && petsMap[servico.idpet]) {
+                petsMap[servico.idpet].servicos.push(servicoFormatado);
+            } else {
+                servicosGerais.push(servicoFormatado);
+            }
+        }
+
+        // 6. Preparar lista de pets com serviços
+        const petsComServicos = [];
+        let totalValorServicosPets = 0;
+        let totalServicosPets = 0;
+
+        for (const petId in petsMap) {
+            const pet = petsMap[petId];
+            const valorTotalPet = pet.servicos.reduce(
+                (sum, s) => sum + s.precoTotal, 0
+            );
+            
+            totalValorServicosPets += valorTotalPet;
+            totalServicosPets += pet.servicos.length;
+
+            petsComServicos.push({
+                idPet: pet.idPet,
+                nome: pet.nome,
+                sexo: pet.sexo,
+                nascimento: pet.nascimento,
+                porte: pet.porte,
+                raca: pet.raca,
+                especie: pet.especie,
+                servicosAdicionados: pet.servicos.length,
+                valorTotalServicos: valorTotalPet,
+                servicos: pet.servicos
+            });
+        }
+
+        // 7. Calcular totais
+        const valorTotalServicosGerais = servicosGerais.reduce(
+            (sum, s) => sum + s.precoTotal, 0
+        );
+
+        const totalServicosAdicionados = servicosGerais.length + totalServicosPets;
+        const valorTotalServicos = valorTotalServicosGerais + totalValorServicosPets;
+
+        // 8. Preparar lista completa de todos os serviços
+        const todosServicos = [...servicosGerais];
+        for (const pet of petsComServicos) {
+            todosServicos.push(...pet.servicos);
+        }
+
+        // 9. Preparar resposta
         res.status(200).json({
             success: true,
-            message: 'Serviços da hospedagem listados por pet',
+            message: 'Serviços do contrato recuperados com sucesso',
             data: {
                 contrato: {
-                    id: contrato.idcontrato,
-                    hospedagem: {
-                        id: contrato.idhospedagem,
-                        nome: contrato.hospedagem_nome || 'Não informado'
-                    }
+                    idContrato: contrato.idcontrato,
+                    idHospedagem: contrato.idhospedagem,
+                    idUsuario: contrato.idusuario,
+                    dataInicio: contrato.datainicio,
+                    dataFim: contrato.datafim,
+                    status: contrato.status,
+                    hospedagemNome: contrato.hospedagem_nome,
+                    valorDiaria: parseFloat(contrato.valor_diaria || 0)
                 },
-                pets: pets.map(pet => ({
-                    idPet: pet.idpet,
-                    nome: pet.pet_nome,
-                    totalServicosAdicionados: (pet.servicos_adicionados || []).length,
-                    valorTotalServicos: (pet.servicos_adicionados || []).reduce((sum, s) => sum + s.precoTotal, 0)
-                })),
-                servicosPorPet: servicosPorPet,
-                servicosGerais: servicosGeraisResult.rows.map(servico => ({
-                    idServico: servico.idservico,
-                    descricao: servico.descricao,
-                    quantidade: servico.quantidade,
-                    precoUnitario: servico.preco_unitario,
-                    precoTotal: servico.preco_total
+                pets: petsComServicos,
+                servicos: {
+                    gerais: servicosGerais,
+                    todos: todosServicos
+                },
+                servicosDisponiveis: servicosDisponiveis.map(s => ({
+                    idservico: s.idservico,
+                    descricao: s.descricao,
+                    preco: parseFloat(s.preco || 0),
+                    ativo: s.ativo,
+                    duracao: s.duracao
                 })),
                 resumo: {
                     totalPets: pets.length,
-                    totalServicosDisponiveis: todosServicos.length,
-                    totalServicosAdicionados: Object.values(servicosPorPet).reduce(
-                        (sum, pet) => sum + pet.servicosAdicionados.length, 0
-                    ) + servicosGeraisResult.rows.length
+                    totalServicosDisponiveis: servicosDisponiveis.length,
+                    totalServicosAdicionados: totalServicosAdicionados,
+                    totalServicosGerais: servicosGerais.length,
+                    totalServicosPets: totalServicosPets,
+                    valorTotalServicos: valorTotalServicos,
+                    valorServicosGerais: valorTotalServicosGerais,
+                    valorServicosPets: totalValorServicosPets
                 }
             }
         });
@@ -585,7 +678,6 @@ const lerServicosExistentesContrato = async (req, res) => {
         if (client) await client.release();
     }
 };
-
 const listarServicosDoPetNoContrato = async (req, res) => {
     let client;
     try {

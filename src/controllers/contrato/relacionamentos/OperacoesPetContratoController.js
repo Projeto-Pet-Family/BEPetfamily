@@ -28,22 +28,35 @@ const adicionarPetContrato = async (req, res) => {
             return res.status(400).json({ message: 'Não é permitido adicionar o mesmo pet múltiplas vezes' });
         }
 
-        const contrato = await client.query(
-            'SELECT c.*, h.valor_diaria FROM contrato c JOIN hospedagem h ON c.idhospedagem = h.idhospedagem WHERE c.idcontrato = $1',
+        // Buscar contrato com dados básicos
+        const contratoQuery = await client.query(
+            `SELECT 
+                c.*, 
+                h.valor_diaria,
+                EXTRACT(DAY FROM (c.datafim - c.datainicio)) + 1 as duracao_dias
+            FROM contrato c 
+            JOIN hospedagem h ON c.idhospedagem = h.idhospedagem 
+            WHERE c.idcontrato = $1`,
             [idContrato]
         );
-        if (contrato.rows.length === 0) {
+        
+        if (contratoQuery.rows.length === 0) {
             await client.query('ROLLBACK');
             return res.status(404).json({ message: 'Contrato não encontrado' });
         }
 
-        if (statusNaoEditaveis.includes(contrato.rows[0].status)) {
+        const contrato = contratoQuery.rows[0];
+        
+        // Verificar status editável
+        const statusNaoEditaveis = ['concluido', 'negado', 'cancelado', 'em_execucao'];
+        if (statusNaoEditaveis.includes(contrato.status)) {
             await client.query('ROLLBACK');
             return res.status(400).json({ 
-                message: `Não é possível adicionar pets a um contrato com status "${statusMap[contrato.rows[0].status]}"`
+                message: `Não é possível adicionar pets a um contrato com status "${contrato.status}"`
             });
         }
 
+        // Verificar pets já existentes no contrato
         const petsExistentes = await client.query(
             'SELECT idpet FROM contrato_pet WHERE idcontrato = $1 AND idpet = ANY($2)',
             [idContrato, pets]
@@ -58,9 +71,10 @@ const adicionarPetContrato = async (req, res) => {
             });
         }
 
+        // Verificar se pets pertencem ao usuário
         const petsValidos = await client.query(
             'SELECT idpet FROM pet WHERE idpet = ANY($1) AND idusuario = $2',
-            [pets, contrato.rows[0].idusuario]
+            [pets, contrato.idusuario]
         );
 
         if (petsValidos.rows.length !== pets.length) {
@@ -68,6 +82,7 @@ const adicionarPetContrato = async (req, res) => {
             return res.status(400).json({ message: 'Um ou mais pets não pertencem ao usuário do contrato' });
         }
 
+        // Adicionar pets ao contrato
         const petsInseridos = [];
         for (const idPet of pets) {
             const result = await client.query(
@@ -78,27 +93,49 @@ const adicionarPetContrato = async (req, res) => {
         }
 
         await client.query('COMMIT');
+        
+        // Buscar contrato completo com relacionamentos
         const contratoCompleto = await buscarContratoComRelacionamentos(client, idContrato);
         
-        const valorDiaria = parseFloat(contrato.rows[0].valor_diaria || 0);
-        const duracaoDias = contratoCompleto.duracao_dias || 1;
+        // Calcular valores adicionais (garantir que duracao_dias não seja null)
+        const valorDiaria = parseFloat(contrato.valor_diaria || 0);
+        const duracaoDias = parseInt(contrato.duracao_dias) || 1;
         const valorAdicionalPorPet = valorDiaria * duracaoDias;
         const valorTotalAdicional = valorAdicionalPorPet * pets.length;
 
+        // Garantir que calculo_valores existe
+        if (!contratoCompleto.calculo_valores) {
+            contratoCompleto.calculo_valores = {
+                valor_total_contrato: 0,
+                valor_diaria: valorDiaria,
+                duracao_dias: duracaoDias,
+                quantidade_pets: contratoCompleto.pets?.length || 0,
+                valor_servicos: 0
+            };
+        }
+
         res.status(200).json({
+            success: true,
             message: 'Pet(s) adicionado(s) com sucesso',
             petsAdicionados: petsInseridos,
             data: contratoCompleto,
             atualizacao_valores: {
                 valor_adicional_por_pet: valorAdicionalPorPet,
                 valor_total_adicional: valorTotalAdicional,
-                valor_total_atualizado: contratoCompleto.calculo_valores.valor_total_contrato
+                valor_total_atualizado: contratoCompleto.calculo_valores.valor_total_contrato + valorTotalAdicional
             }
         });
     } catch (error) {
         if (client) await client.query('ROLLBACK');
-        res.status(500).json({ message: 'Erro ao adicionar pet ao contrato', error: error.message });
-    } finally { if (client) client.release(); }
+        console.error('Erro ao adicionar pet ao contrato:', error);
+        res.status(500).json({ 
+            success: false,
+            message: 'Erro ao adicionar pet ao contrato', 
+            error: error.message 
+        });
+    } finally { 
+        if (client) client.release(); 
+    }
 };
 
 const excluirPetContrato = async (req, res) => {
