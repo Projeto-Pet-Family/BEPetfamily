@@ -8,6 +8,7 @@ router.get('/contrato/:idContrato', contratoController.buscarContratoPorId);
 router.post('/contrato', contratoController.criarContrato);
 router.put('/contrato/:idContrato', contratoController.atualizarContrato);
 router.delete('/contrato/:idContrato', contratoController.excluirContrato);
+router.get('/contrato/ler-contrato-hospedagem/:idHospedagem', contratoController.lerContratosPorHospedagem);
 
 // Rotas por usuário
 router.get('/contrato/usuario/:idUsuario', contratoController.buscarContratosPorUsuario);
