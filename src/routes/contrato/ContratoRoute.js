@@ -31,6 +31,7 @@ router.put('/contrato/:idContrato/data', contratoController.atualizarDatasContra
 router.put('/contrato/:idContrato/status', contratoController.atualizarStatusContrato);
 router.put('/contrato/:idContrato/alterar-status', contratoController.alterarStatusContrato);
 router.get('/contrato/:idContrato/transicoes-status', contratoController.obterTransicoesStatus);
+router.get('/contrato/usuario/:idUsuario/filtrar', contratoController.filtrarContratosUsuarioPorStatus);
 
 // Rota de cálculo
 router.get('/contrato/:idContrato/calcular', contratoController.calcularValorContrato);

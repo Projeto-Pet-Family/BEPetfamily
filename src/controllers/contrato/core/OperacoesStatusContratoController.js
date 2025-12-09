@@ -224,8 +224,177 @@ const obterTransicoesStatus = async (req, res) => {
     }
 };
 
+const filtrarContratosUsuarioPorStatus = async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        const { idUsuario } = req.params;
+        const { status, dataInicio, dataFim, orderBy = 'datacriacao', orderDirection = 'DESC' } = req.query;
+
+        // Validação dos status
+        if (status) {
+            const statusArray = Array.isArray(status) ? status : [status];
+            const statusInvalidos = statusArray.filter(s => !validarStatus(s));
+            
+            if (statusInvalidos.length > 0) {
+                return res.status(400).json({ 
+                    message: `Status inválido(s): ${statusInvalidos.join(', ')}` 
+                });
+            }
+        }
+
+        // Construir query base
+        let query = `
+            SELECT 
+                c.*,
+                h.nome as nome_hospedagem,
+                u.nome as nome_usuario,
+                u.email as email_usuario
+            FROM contrato c
+            INNER JOIN hospedagem h ON c.idhospedagem = h.idhospedagem
+            INNER JOIN usuario u ON c.idusuario = u.idusuario
+            WHERE c.idusuario = $1
+        `;
+
+        const queryParams = [idUsuario];
+        let paramCount = 1;
+
+        // Adicionar filtros
+        if (status) {
+            const statusArray = Array.isArray(status) ? status : [status];
+            paramCount++;
+            query += ` AND c.status IN (${statusArray.map((_, idx) => `$${paramCount + idx}`).join(', ')})`;
+            queryParams.push(...statusArray);
+            paramCount += statusArray.length - 1;
+        }
+
+        if (dataInicio) {
+            paramCount++;
+            query += ` AND c.datacriacao >= $${paramCount}`;
+            queryParams.push(dataInicio);
+        }
+
+        if (dataFim) {
+            paramCount++;
+            query += ` AND c.datacriacao <= $${paramCount}`;
+            queryParams.push(dataFim);
+        }
+
+        // Validar e adicionar ordenação
+        const camposOrdenaveis = ['datacriacao', 'dataatualizacao', 'datainicio', 'datafim', 'valor', 'status'];
+        const direcoesValidas = ['ASC', 'DESC'];
+        
+        const campoOrdenacao = camposOrdenaveis.includes(orderBy) ? orderBy : 'datacriacao';
+        const direcao = direcoesValidas.includes(orderDirection.toUpperCase()) ? orderDirection.toUpperCase() : 'DESC';
+        
+        query += ` ORDER BY c.${campoOrdenacao} ${direcao}`;
+
+        // Executar query
+        const result = await client.query(query, queryParams);
+
+        if (result.rows.length === 0) {
+            return res.status(200).json({ 
+                message: 'Nenhum contrato encontrado para os filtros aplicados',
+                data: [],
+                filtros: {
+                    usuario: idUsuario,
+                    status: status || 'todos',
+                    dataInicio,
+                    dataFim
+                }
+            });
+        }
+
+        // Agrupar por status para estatísticas
+        const estatisticas = {
+            total: result.rows.length,
+            porStatus: {},
+            valores: {
+                total: 0,
+                medio: 0
+            }
+        };
+
+        // Calcular estatísticas
+        result.rows.forEach(contrato => {
+            const statusContrato = contrato.status;
+            
+            if (!estatisticas.porStatus[statusContrato]) {
+                estatisticas.porStatus[statusContrato] = {
+                    quantidade: 0,
+                    valorTotal: 0,
+                    descricao: statusMap[statusContrato] || 'Desconhecido'
+                };
+            }
+            
+            estatisticas.porStatus[statusContrato].quantidade++;
+            estatisticas.porStatus[statusContrato].valorTotal += parseFloat(contrato.valor || 0);
+            estatisticas.valores.total += parseFloat(contrato.valor || 0);
+        });
+
+        // Calcular valor médio
+        estatisticas.valores.medio = estatisticas.total > 0 ? 
+            estatisticas.valores.total / estatisticas.total : 0;
+
+        // Formatar dados dos contratos
+        const contratosFormatados = result.rows.map(contrato => ({
+            id: contrato.idcontrato,
+            hospedagem: {
+                id: contrato.idhospedagem,
+                nome: contrato.nome_hospedagem
+            },
+            usuario: {
+                id: contrato.idusuario,
+                nome: contrato.nome_usuario,
+                email: contrato.email_usuario
+            },
+            status: {
+                codigo: contrato.status,
+                descricao: statusMap[contrato.status] || 'Desconhecido'
+            },
+            datas: {
+                criacao: contrato.datacriacao,
+                atualizacao: contrato.dataatualizacao,
+                inicio: contrato.datainicio,
+                fim: contrato.datafim
+            },
+            valor: contrato.valor,
+            observacoes: contrato.observacoes
+        }));
+
+        res.status(200).json({
+            message: 'Contratos filtrados com sucesso',
+            data: contratosFormatados,
+            estatisticas: estatisticas,
+            filtros: {
+                usuario: idUsuario,
+                status: status || 'todos',
+                dataInicio,
+                dataFim,
+                orderBy: campoOrdenacao,
+                orderDirection: direcao
+            },
+            paginacao: {
+                total: result.rows.length,
+                pagina: 1,
+                porPagina: contratosFormatados.length
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao filtrar contratos:', error);
+        res.status(500).json({ 
+            message: 'Erro ao filtrar contratos', 
+            error: error.message 
+        });
+    } finally {
+        if (client) await client.release();
+    }
+};
+
 module.exports = {
     atualizarStatusContrato,
     alterarStatusContrato,
-    obterTransicoesStatus
+    obterTransicoesStatus,
+    filtrarContratosUsuarioPorStatus
 };
