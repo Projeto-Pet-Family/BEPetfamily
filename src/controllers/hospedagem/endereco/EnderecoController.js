@@ -394,10 +394,269 @@ async function excluirEndereco(req, res) {
     }
 }
 
+async function criarEnderecoCompleto(req, res) {
+    let client;
+
+    try {
+        client = await pool.connect();
+
+        // Dados recebidos do frontend
+        const { 
+            rua,
+            numero,
+            complemento,
+            bairro,
+            cidade,
+            estado,
+            cep
+        } = req.body;
+
+        console.log('Dados recebidos para criar endereço completo:', req.body);
+
+        // Validar campos obrigatórios
+        if (!rua || !numero || !bairro || !cidade || !estado || !cep) {
+            return res.status(400).json({
+                message: 'Todos os campos são obrigatórios (exceto complemento)'
+            });
+        }
+
+        // Validar o número
+        if (isNaN(numero)) {
+            return res.status(400).json({
+                message: 'Número deve ser um valor numérico'
+            });
+        }
+
+        // Limpar e formatar o CEP (remover traços)
+        const cepFormatado = cep.replace(/\D/g, '');
+
+        // Verificar se o estado existe, se não, criar
+        let estadoId;
+        try {
+            const estadoResult = await client.query(
+                'SELECT "idEstado" FROM Estado WHERE UPPER(sigla) = UPPER($1) OR UPPER(nome) = UPPER($1)',
+                [estado]
+            );
+
+            if (estadoResult.rows.length > 0) {
+                estadoId = estadoResult.rows[0].idEstado;
+                console.log(`Estado encontrado: ${estado} (ID: ${estadoId})`);
+            } else {
+                // Criar novo estado
+                const novoEstado = await client.query(
+                    'INSERT INTO Estado (nome, sigla) VALUES ($1, UPPER($2)) RETURNING "idEstado"',
+                    [estado, estado.substring(0, 2)] // Usa as 2 primeiras letras como sigla
+                );
+                estadoId = novoEstado.rows[0].idEstado;
+                console.log(`Estado criado: ${estado} (ID: ${estadoId})`);
+            }
+        } catch (error) {
+            console.error('Erro ao processar estado:', error);
+            throw error;
+        }
+
+        // Verificar se a cidade existe, se não, criar
+        let cidadeId;
+        try {
+            const cidadeResult = await client.query(
+                'SELECT "idCidade" FROM Cidade WHERE UPPER(nome) = UPPER($1) AND "idEstado" = $2',
+                [cidade, estadoId]
+            );
+
+            if (cidadeResult.rows.length > 0) {
+                cidadeId = cidadeResult.rows[0].idCidade;
+                console.log(`Cidade encontrada: ${cidade} (ID: ${cidadeId})`);
+            } else {
+                // Criar nova cidade
+                const novaCidade = await client.query(
+                    'INSERT INTO Cidade (nome, "idEstado") VALUES ($1, $2) RETURNING "idCidade"',
+                    [cidade, estadoId]
+                );
+                cidadeId = novaCidade.rows[0].idCidade;
+                console.log(`Cidade criada: ${cidade} (ID: ${cidadeId})`);
+            }
+        } catch (error) {
+            console.error('Erro ao processar cidade:', error);
+            throw error;
+        }
+
+        // Verificar se o bairro existe, se não, criar
+        let bairroId;
+        try {
+            const bairroResult = await client.query(
+                'SELECT "idBairro" FROM Bairro WHERE UPPER(nome) = UPPER($1) AND "idCidade" = $2',
+                [bairro, cidadeId]
+            );
+
+            if (bairroResult.rows.length > 0) {
+                bairroId = bairroResult.rows[0].idBairro;
+                console.log(`Bairro encontrado: ${bairro} (ID: ${bairroId})`);
+            } else {
+                // Criar novo bairro
+                const novoBairro = await client.query(
+                    'INSERT INTO Bairro (nome, "idCidade") VALUES ($1, $2) RETURNING "idBairro"',
+                    [bairro, cidadeId]
+                );
+                bairroId = novoBairro.rows[0].idBairro;
+                console.log(`Bairro criado: ${bairro} (ID: ${bairroId})`);
+            }
+        } catch (error) {
+            console.error('Erro ao processar bairro:', error);
+            throw error;
+        }
+
+        // Verificar se o logradouro existe, se não, criar
+        let logradouroId;
+        try {
+            const logradouroResult = await client.query(
+                'SELECT "idLogradouro" FROM Logradouro WHERE UPPER(nome) = UPPER($1) AND "idBairro" = $2',
+                [rua, bairroId]
+            );
+
+            if (logradouroResult.rows.length > 0) {
+                logradouroId = logradouroResult.rows[0].idLogradouro;
+                console.log(`Logradouro encontrado: ${rua} (ID: ${logradouroId})`);
+            } else {
+                // Criar novo logradouro
+                const novoLogradouro = await client.query(
+                    'INSERT INTO Logradouro (nome, "idBairro") VALUES ($1, $2) RETURNING "idLogradouro"',
+                    [rua, bairroId]
+                );
+                logradouroId = novoLogradouro.rows[0].idLogradouro;
+                console.log(`Logradouro criado: ${rua} (ID: ${logradouroId})`);
+            }
+        } catch (error) {
+            console.error('Erro ao processar logradouro:', error);
+            throw error;
+        }
+
+        // Verificar se o CEP existe, se não, criar
+        let cepId;
+        try {
+            const cepResult = await client.query(
+                'SELECT "idCEP" FROM CEP WHERE codigo = $1',
+                [cepFormatado]
+            );
+
+            if (cepResult.rows.length > 0) {
+                cepId = cepResult.rows[0].idCEP;
+                console.log(`CEP encontrado: ${cepFormatado} (ID: ${cepId})`);
+            } else {
+                // Criar novo CEP
+                const novoCEP = await client.query(
+                    'INSERT INTO CEP (codigo, "idLogradouro") VALUES ($1, $2) RETURNING "idCEP"',
+                    [cepFormatado, logradouroId]
+                );
+                cepId = novoCEP.rows[0].idCEP;
+                console.log(`CEP criado: ${cepFormatado} (ID: ${cepId})`);
+            }
+        } catch (error) {
+            console.error('Erro ao processar CEP:', error);
+            throw error;
+        }
+
+        // Verificar se o endereço já existe (combinação de logradouro, número e CEP)
+        const enderecoExistente = await client.query(
+            'SELECT "idEndereco" FROM Endereco WHERE "idLogradouro" = $1 AND numero = $2 AND "idCEP" = $3',
+            [logradouroId, numero, cepId]
+        );
+
+        if (enderecoExistente.rows.length > 0) {
+            // Se o endereço já existe, retorna o ID existente
+            const enderecoId = enderecoExistente.rows[0].idEndereco;
+            console.log(`Endereço já existe: ID ${enderecoId}`);
+            
+            // Buscar dados completos do endereço existente
+            const enderecoCompleto = await client.query(`
+                SELECT 
+                    e.*, 
+                    c.codigo as cep, 
+                    lo.nome as logradouro, 
+                    b.nome as bairro, 
+                    ci.nome as cidade, 
+                    es.nome as estado, 
+                    es.sigla
+                FROM Endereco e
+                JOIN CEP c ON e."idCEP" = c."idCEP"
+                JOIN Logradouro lo ON e."idLogradouro" = lo."idLogradouro"
+                JOIN Bairro b ON lo."idBairro" = b."idBairro"
+                JOIN Cidade ci ON b."idCidade" = ci."idCidade"
+                JOIN Estado es ON ci."idEstado" = es."idEstado"
+                WHERE e."idEndereco" = $1
+            `, [enderecoId]);
+
+            return res.status(200).json({
+                message: 'Endereço já existe no sistema',
+                idendereco: enderecoId,
+                data: enderecoCompleto.rows[0],
+                created: false
+            });
+        }
+
+        // Criar o endereço final
+        console.log('Criando novo endereço...');
+        const novoEndereco = await client.query(
+            'INSERT INTO Endereco ("idLogradouro", numero, complemento, "idCEP") VALUES ($1, $2, $3, $4) RETURNING "idEndereco"',
+            [logradouroId, numero, complemento || null, cepId]
+        );
+
+        const enderecoId = novoEndereco.rows[0].idEndereco;
+        console.log(`Endereço criado com ID: ${enderecoId}`);
+
+        // Buscar os dados completos do endereço criado
+        const enderecoCompleto = await client.query(`
+            SELECT 
+                e.*, 
+                c.codigo as cep, 
+                lo.nome as logradouro, 
+                b.nome as bairro, 
+                ci.nome as cidade, 
+                es.nome as estado, 
+                es.sigla
+            FROM Endereco e
+            JOIN CEP c ON e."idCEP" = c."idCEP"
+            JOIN Logradouro lo ON e."idLogradouro" = lo."idLogradouro"
+            JOIN Bairro b ON lo."idBairro" = b."idBairro"
+            JOIN Cidade ci ON b."idCidade" = ci."idCidade"
+            JOIN Estado es ON ci."idEstado" = es."idEstado"
+            WHERE e."idEndereco" = $1
+        `, [enderecoId]);
+
+        res.status(201).json({
+            message: 'Endereço criado com sucesso',
+            idendereco: enderecoId,
+            data: enderecoCompleto.rows[0],
+            created: true
+        });
+
+    } catch (error) {
+        console.error('Erro ao criar endereço completo:', error);
+        
+        // Erros específicos
+        if (error.code === '23505') { // Violação de constraint única
+            return res.status(409).json({
+                message: 'Endereço já existe no sistema',
+                error: error.message
+            });
+        }
+        
+        res.status(500).json({
+            message: 'Erro ao criar endereço completo',
+            error: error.message,
+            details: error.detail
+        });
+    } finally {
+        if (client) {
+            await client.end();
+        }
+    }
+}
+
 module.exports = {
     lerEnderecos,
     buscarEnderecoPorId,
     criarEndereco,
     atualizarEndereco,
-    excluirEndereco
+    excluirEndereco,
+    criarEnderecoCompleto
 };
