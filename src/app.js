@@ -44,26 +44,7 @@ const corsOptions = {
   origin: function (origin, callback) {
     // Lista de origens permitidas
     const allowedOrigins = [
-  'https://pet-family-front.vercel.app',
-  'https://bepetfamily.onrender.com',
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'http://localhost:3001',
-  // Adicione as portas do Flutter/Dart
-  'http://localhost:62453',
-  'http://localhost:64490',
-  'http://localhost:61123', // Porta comum do Flutter Web
-  'http://localhost:8080',  // Outra porta comum
-  // Para desenvolvimento Flutter Web
-  'http://localhost',
-  // Para permitir todas as origens locais (desenvolvimento)
-  /^http:\/\/localhost:\d+$/,
-  // Para emuladores Android
-  'http://10.0.2.2:3000',
-  'http://10.0.2.2',
-  // Para emuladores iOS
-  'http://127.0.0.1:3000',
-  'http://127.0.0.1',
+  '*'
 ];
     
     // Permitir requisições sem origin (como mobile apps, curl, etc.)
