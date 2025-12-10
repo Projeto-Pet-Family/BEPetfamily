@@ -41,11 +41,25 @@ app.use(express.json())
 
 // Configurar CORS para produção e desenvolvimento
 const corsOptions = {
-  origin: function (origin, callback) {
+  origin: '*',/* function (origin, callback) {
     // Lista de origens permitidas
     const allowedOrigins = [
-  '*'
-];
+      'https://pet-family-front.vercel.app',
+      'https://bepetfamily.onrender.com',
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://localhost:3001',
+      // Para desenvolvimento Flutter Web
+      'http://localhost',
+      // Para permitir todas as origens locais (desenvolvimento)
+      /^http:\/\/localhost:\d+$/,
+      // Para emuladores Android
+      'http://10.0.2.2:3000',
+      'http://10.0.2.2',
+      // Para emuladores iOS
+      'http://127.0.0.1:3000',
+      'http://127.0.0.1',
+  ];
     
     // Permitir requisições sem origin (como mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
@@ -56,7 +70,7 @@ const corsOptions = {
       console.warn(`🚫 Origem bloqueada por CORS: ${origin}`);
       callback(new Error('Não permitido por CORS'));
     }
-  },
+  }, */
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
