@@ -7,14 +7,12 @@ const MensagensController = require('../../controllers/mensagens/MensagemControl
 Router.post('/mensagem/mobile', MensagensController.enviarMensagemMobile)
 Router.get('/mensagem/mobile/conversa/:idusuario/:idhospedagem', MensagensController.buscarConversaMobile)
 Router.get('/mensagem/mobile/conversas/:idusuario', MensagensController.listarConversasMobile)
-Router.get('/mensagem/mobile/nao-lidas/:idusuario', MensagensController.contarNaoLidasMobile)
 
 // web
 
 Router.post('/mensagem/web', MensagensController.enviarMensagemWeb)
 Router.get('/mensagem/web/conversa/:idhospedagem/:idusuario', MensagensController.buscarConversaWeb)
 Router.get('/mensagem/web/conversas/:idhospedagem', MensagensController.listarConversasWeb)
-Router.get('/mensagem/web/nao-lidas/:idhospedagem', MensagensController.contarNaoLidasWeb)
 
 Router.put('/mensagem/:idmensagem/ler', MensagensController.marcarComoLida)
 
