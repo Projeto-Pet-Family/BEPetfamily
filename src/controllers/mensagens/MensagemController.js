@@ -384,70 +384,193 @@ async function listarConversasWeb(req, res) {
             });
         }
 
-        // Buscar conversas da hospedagem com usuários
-        const query = `
-            SELECT DISTINCT ON (
+        // Primeiro, buscar todos os usuários que tem conversa com a hospedagem
+        const usuariosQuery = `
+            SELECT DISTINCT
                 CASE 
                     WHEN m.id_remetente = $1 THEN m.id_destinatario 
                     ELSE m.id_remetente 
-                END
-            )
-                CASE 
-                    WHEN m.id_remetente = $1 THEN m.id_destinatario 
-                    ELSE m.id_remetente 
-                END as idcontato,
-                u.nome as nome_contato,
-                'usuario' as tipo_contato,
-                m.mensagem as ultima_mensagem,
-                m.data_envio as ultima_data,
-                m.lida,
-                (SELECT COUNT(*) 
-                 FROM mensagens 
-                 WHERE id_remetente = $1 
-                 AND id_destinatario = CASE 
-                    WHEN m.id_remetente = $1 THEN m.id_destinatario 
-                    ELSE m.id_remetente 
-                 END
-                 AND lida = false) as nao_lidas
+                END as idusuario
             FROM mensagens m
-            INNER JOIN usuario u ON (
-                CASE 
-                    WHEN m.id_remetente = $1 THEN m.id_destinatario 
-                    ELSE m.id_remetente 
-                END
-            ) = u.idusuario
             WHERE m.id_remetente = $1 OR m.id_destinatario = $1
-            ORDER BY 
-                CASE 
-                    WHEN m.id_remetente = $1 THEN m.id_destinatario 
-                    ELSE m.id_remetente 
-                END,
-                m.data_envio DESC
+            ORDER BY idusuario
             LIMIT $2 OFFSET $3
         `;
 
-        const result = await client.query(query, [idhospedagem, limit, offset]);
+        const usuariosResult = await client.query(usuariosQuery, [idhospedagem, limit, offset]);
+        
+        // Se não houver usuários, retorna array vazio
+        if (usuariosResult.rows.length === 0) {
+            return res.status(200).json({
+                conversas: [],
+                paginacao: {
+                    limit: parseInt(limit),
+                    offset: parseInt(offset),
+                    total: 0
+                }
+            });
+        }
+
+        const conversas = [];
+        
+        // Para cada usuário, buscar TODAS as mensagens
+        for (const usuarioRow of usuariosResult.rows) {
+            const idUsuario = usuarioRow.idusuario;
+            
+            // 1. Buscar informações do usuário
+            const usuarioInfo = await client.query(
+                'SELECT nome FROM usuario WHERE idusuario = $1',
+                [idUsuario]
+            );
+            
+            if (usuarioInfo.rows.length === 0) continue;
+            
+            // 2. Buscar TODAS as mensagens deste usuário com a hospedagem
+            const todasMensagensQuery = `
+                SELECT 
+                    m.idmensagem,
+                    m.id_remetente,
+                    m.id_destinatario,
+                    m.mensagem,
+                    m.data_envio,
+                    m.lida,
+                    CASE 
+                        WHEN m.id_remetente = $1 THEN 'hospedagem'
+                        ELSE 'usuario'
+                    END as tipo_remetente,
+                    CASE 
+                        WHEN m.id_remetente = $1 THEN h.nome
+                        ELSE u.nome 
+                    END as nome_remetente,
+                    CASE 
+                        WHEN m.id_destinatario = $2 THEN 'hospedagem'
+                        ELSE 'usuario'
+                    END as tipo_destinatario,
+                    CASE 
+                        WHEN m.id_destinatario = $2 THEN h2.nome
+                        ELSE u2.nome 
+                    END as nome_destinatario
+                FROM mensagens m
+                LEFT JOIN hospedagem h ON m.id_remetente = h.idhospedagem
+                LEFT JOIN hospedagem h2 ON m.id_destinatario = h2.idhospedagem
+                LEFT JOIN usuario u ON m.id_remetente = u.idusuario
+                LEFT JOIN usuario u2 ON m.id_destinatario = u2.idusuario
+                WHERE (m.id_remetente = $1 AND m.id_destinatario = $2) 
+                   OR (m.id_remetente = $2 AND m.id_destinatario = $1)
+                ORDER BY m.data_envio ASC
+            `;
+            
+            const mensagensResult = await client.query(
+                todasMensagensQuery, 
+                [idhospedagem, idUsuario]
+            );
+            
+            // 3. Extrair primeira e última mensagem do array
+            const todasMensagens = mensagensResult.rows;
+            const primeiraMensagem = todasMensagens.length > 0 ? todasMensagens[0] : null;
+            const ultimaMensagem = todasMensagens.length > 0 ? todasMensagens[todasMensagens.length - 1] : null;
+            
+            // 4. Contar mensagens não lidas
+            const naoLidasQuery = `
+                SELECT COUNT(*) as total_nao_lidas 
+                FROM mensagens 
+                WHERE id_remetente = $1 
+                  AND id_destinatario = $2
+                  AND lida = false
+            `;
+            
+            const naoLidasResult = await client.query(
+                naoLidasQuery, 
+                [idUsuario, idhospedagem]
+            );
+            
+            // 5. Criar objeto da conversa com TODAS as mensagens
+            const conversa = {
+                idcontato: idUsuario,
+                nome_contato: usuarioInfo.rows[0].nome,
+                tipo_contato: 'usuario',
+                // Informações resumidas
+                primeira_mensagem: primeiraMensagem ? {
+                    id: primeiraMensagem.idmensagem,
+                    mensagem: primeiraMensagem.mensagem,
+                    data_envio: primeiraMensagem.data_envio,
+                    remetente: primeiraMensagem.tipo_remetente,
+                    nome_remetente: primeiraMensagem.nome_remetente,
+                    destinatario: primeiraMensagem.tipo_destinatario,
+                    nome_destinatario: primeiraMensagem.nome_destinatario
+                } : null,
+                ultima_mensagem: ultimaMensagem ? {
+                    id: ultimaMensagem.idmensagem,
+                    mensagem: ultimaMensagem.mensagem,
+                    data_envio: ultimaMensagem.data_envio,
+                    lida: ultimaMensagem.lida,
+                    remetente: ultimaMensagem.tipo_remetente,
+                    nome_remetente: ultimaMensagem.nome_remetente,
+                    destinatario: ultimaMensagem.tipo_destinatario,
+                    nome_destinatario: ultimaMensagem.nome_destinatario
+                } : null,
+                total_mensagens: todasMensagens.length,
+                nao_lidas: parseInt(naoLidasResult.rows[0].total_nao_lidas),
+                // Para compatibilidade com o formato anterior
+                lida: ultimaMensagem ? ultimaMensagem.lida : false,
+                ultima_data: ultimaMensagem ? ultimaMensagem.data_envio : null,
+                // TODAS AS MENSAGENS
+                historico_completo: todasMensagens.map(msg => ({
+                    id: msg.idmensagem,
+                    remetente: {
+                        id: msg.id_remetente,
+                        tipo: msg.tipo_remetente,
+                        nome: msg.nome_remetente
+                    },
+                    destinatario: {
+                        id: msg.id_destinatario,
+                        tipo: msg.tipo_destinatario,
+                        nome: msg.nome_destinatario
+                    },
+                    mensagem: msg.mensagem,
+                    data_envio: msg.data_envio,
+                    lida: msg.lida
+                }))
+            };
+            
+            conversas.push(conversa);
+        }
+        
+        // Buscar total geral de conversas para paginação
+        const totalQuery = `
+            SELECT COUNT(DISTINCT 
+                CASE 
+                    WHEN m.id_remetente = $1 THEN m.id_destinatario 
+                    ELSE m.id_remetente 
+                END
+            ) as total_conversas
+            FROM mensagens m
+            WHERE m.id_remetente = $1 OR m.id_destinatario = $1
+        `;
+        
+        const totalResult = await client.query(totalQuery, [idhospedagem]);
         
         res.status(200).json({
-            conversas: result.rows,
+            conversas: conversas,
             paginacao: {
                 limit: parseInt(limit),
                 offset: parseInt(offset),
-                total: result.rows.length
+                total: parseInt(totalResult.rows[0].total_conversas),
+                has_more: (parseInt(offset) + conversas.length) < parseInt(totalResult.rows[0].total_conversas)
             }
         });
 
     } catch (error) {
         res.status(500).json({
             message: 'Erro ao listar conversas',
-            error: error.message
+            error: error.message,
+            stack: error.stack
         });
         console.error('Erro ao listar conversas web:', error);
     } finally {
         if (client) client.release();
     }
 }
-
 // ==================== MÉTODOS COMPLEMENTARES ====================
 
 async function marcarComoLida(req, res) {
