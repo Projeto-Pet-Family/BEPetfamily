@@ -430,206 +430,259 @@ async function criarEnderecoCompleto(req, res) {
         // Limpar e formatar o CEP (remover traços)
         const cepFormatado = cep.replace(/\D/g, '');
 
-        // Verificar se o estado existe, se não, criar
+        // Iniciar transação para garantir consistência
+        await client.query('BEGIN');
+
+        // 1. Verificar se o estado existe, se não, criar
         let estadoId;
         try {
+            // Primeiro tenta buscar pela sigla (ex: SP, RJ)
             const estadoResult = await client.query(
-                'SELECT "idEstado" FROM Estado WHERE UPPER(sigla) = UPPER($1) OR UPPER(nome) = UPPER($1)',
-                [estado]
+                'SELECT idestado FROM estado WHERE UPPER(sigla) = UPPER($1)',
+                [estado.toUpperCase()]
             );
 
             if (estadoResult.rows.length > 0) {
-                estadoId = estadoResult.rows[0].idEstado;
-                console.log(`Estado encontrado: ${estado} (ID: ${estadoId})`);
+                estadoId = estadoResult.rows[0].idestado;
+                console.log(`Estado encontrado pela sigla: ${estado} (ID: ${estadoId})`);
             } else {
-                // Criar novo estado
-                const novoEstado = await client.query(
-                    'INSERT INTO Estado (nome, sigla) VALUES ($1, UPPER($2)) RETURNING "idEstado"',
-                    [estado, estado.substring(0, 2)] // Usa as 2 primeiras letras como sigla
+                // Se não encontrar pela sigla, tenta pelo nome
+                const estadoNomeResult = await client.query(
+                    'SELECT idestado FROM estado WHERE UPPER(nome) = UPPER($1)',
+                    [estado]
                 );
-                estadoId = novoEstado.rows[0].idEstado;
-                console.log(`Estado criado: ${estado} (ID: ${estadoId})`);
+
+                if (estadoNomeResult.rows.length > 0) {
+                    estadoId = estadoNomeResult.rows[0].idestado;
+                    console.log(`Estado encontrado pelo nome: ${estado} (ID: ${estadoId})`);
+                } else {
+                    // Se não existir, criar novo estado
+                    // Para estados brasileiros, precisamos saber o nome completo
+                    // Vamos usar um mapeamento de siglas para nomes
+                    const estadosMap = {
+                        'AC': 'Acre', 'AL': 'Alagoas', 'AP': 'Amapá', 'AM': 'Amazonas',
+                        'BA': 'Bahia', 'CE': 'Ceará', 'DF': 'Distrito Federal', 'ES': 'Espírito Santo',
+                        'GO': 'Goiás', 'MA': 'Maranhão', 'MT': 'Mato Grosso', 'MS': 'Mato Grosso do Sul',
+                        'MG': 'Minas Gerais', 'PA': 'Pará', 'PB': 'Paraíba', 'PR': 'Paraná',
+                        'PE': 'Pernambuco', 'PI': 'Piauí', 'RJ': 'Rio de Janeiro', 'RN': 'Rio Grande do Norte',
+                        'RS': 'Rio Grande do Sul', 'RO': 'Rondônia', 'RR': 'Roraima', 'SC': 'Santa Catarina',
+                        'SP': 'São Paulo', 'SE': 'Sergipe', 'TO': 'Tocantins'
+                    };
+
+                    const sigla = estado.toUpperCase();
+                    const nomeEstado = estadosMap[sigla] || estado;
+                    
+                    const novoEstado = await client.query(
+                        'INSERT INTO estado (nome, sigla) VALUES ($1, $2) RETURNING idestado',
+                        [nomeEstado, sigla]
+                    );
+                    estadoId = novoEstado.rows[0].idestado;
+                    console.log(`Estado criado: ${nomeEstado} (${sigla}) - ID: ${estadoId}`);
+                }
             }
         } catch (error) {
+            await client.query('ROLLBACK');
             console.error('Erro ao processar estado:', error);
             throw error;
         }
 
-        // Verificar se a cidade existe, se não, criar
+        // 2. Verificar se a cidade existe, se não, criar
         let cidadeId;
         try {
             const cidadeResult = await client.query(
-                'SELECT "idCidade" FROM Cidade WHERE UPPER(nome) = UPPER($1) AND "idEstado" = $2',
+                'SELECT idcidade FROM cidade WHERE UPPER(nome) = UPPER($1) AND idestado = $2',
                 [cidade, estadoId]
             );
 
             if (cidadeResult.rows.length > 0) {
-                cidadeId = cidadeResult.rows[0].idCidade;
+                cidadeId = cidadeResult.rows[0].idcidade;
                 console.log(`Cidade encontrada: ${cidade} (ID: ${cidadeId})`);
             } else {
                 // Criar nova cidade
                 const novaCidade = await client.query(
-                    'INSERT INTO Cidade (nome, "idEstado") VALUES ($1, $2) RETURNING "idCidade"',
+                    'INSERT INTO cidade (nome, idestado) VALUES ($1, $2) RETURNING idcidade',
                     [cidade, estadoId]
                 );
-                cidadeId = novaCidade.rows[0].idCidade;
+                cidadeId = novaCidade.rows[0].idcidade;
                 console.log(`Cidade criada: ${cidade} (ID: ${cidadeId})`);
             }
         } catch (error) {
+            await client.query('ROLLBACK');
             console.error('Erro ao processar cidade:', error);
             throw error;
         }
 
-        // Verificar se o bairro existe, se não, criar
+        // 3. Verificar se o bairro existe, se não, criar
         let bairroId;
         try {
             const bairroResult = await client.query(
-                'SELECT "idBairro" FROM Bairro WHERE UPPER(nome) = UPPER($1) AND "idCidade" = $2',
+                'SELECT idbairro FROM bairro WHERE UPPER(nome) = UPPER($1) AND idcidade = $2',
                 [bairro, cidadeId]
             );
 
             if (bairroResult.rows.length > 0) {
-                bairroId = bairroResult.rows[0].idBairro;
+                bairroId = bairroResult.rows[0].idbairro;
                 console.log(`Bairro encontrado: ${bairro} (ID: ${bairroId})`);
             } else {
                 // Criar novo bairro
                 const novoBairro = await client.query(
-                    'INSERT INTO Bairro (nome, "idCidade") VALUES ($1, $2) RETURNING "idBairro"',
+                    'INSERT INTO bairro (nome, idcidade) VALUES ($1, $2) RETURNING idbairro',
                     [bairro, cidadeId]
                 );
-                bairroId = novoBairro.rows[0].idBairro;
+                bairroId = novoBairro.rows[0].idbairro;
                 console.log(`Bairro criado: ${bairro} (ID: ${bairroId})`);
             }
         } catch (error) {
+            await client.query('ROLLBACK');
             console.error('Erro ao processar bairro:', error);
             throw error;
         }
 
-        // Verificar se o logradouro existe, se não, criar
+        // 4. Verificar se o logradouro existe, se não, criar
         let logradouroId;
         try {
             const logradouroResult = await client.query(
-                'SELECT "idLogradouro" FROM Logradouro WHERE UPPER(nome) = UPPER($1) AND "idBairro" = $2',
+                'SELECT idlogradouro FROM logradouro WHERE UPPER(nome) = UPPER($1) AND idbairro = $2',
                 [rua, bairroId]
             );
 
             if (logradouroResult.rows.length > 0) {
-                logradouroId = logradouroResult.rows[0].idLogradouro;
+                logradouroId = logradouroResult.rows[0].idlogradouro;
                 console.log(`Logradouro encontrado: ${rua} (ID: ${logradouroId})`);
             } else {
                 // Criar novo logradouro
                 const novoLogradouro = await client.query(
-                    'INSERT INTO Logradouro (nome, "idBairro") VALUES ($1, $2) RETURNING "idLogradouro"',
+                    'INSERT INTO logradouro (nome, idbairro) VALUES ($1, $2) RETURNING idlogradouro',
                     [rua, bairroId]
                 );
-                logradouroId = novoLogradouro.rows[0].idLogradouro;
+                logradouroId = novoLogradouro.rows[0].idlogradouro;
                 console.log(`Logradouro criado: ${rua} (ID: ${logradouroId})`);
             }
         } catch (error) {
+            await client.query('ROLLBACK');
             console.error('Erro ao processar logradouro:', error);
             throw error;
         }
 
-        // Verificar se o CEP existe, se não, criar
+        // 5. Verificar se o CEP existe, se não, criar
         let cepId;
         try {
             const cepResult = await client.query(
-                'SELECT "idCEP" FROM CEP WHERE codigo = $1',
+                'SELECT idcep FROM cep WHERE codigo = $1',
                 [cepFormatado]
             );
 
             if (cepResult.rows.length > 0) {
-                cepId = cepResult.rows[0].idCEP;
+                cepId = cepResult.rows[0].idcep;
                 console.log(`CEP encontrado: ${cepFormatado} (ID: ${cepId})`);
+                
+                // Verificar se o CEP está vinculado ao logradouro correto
+                const cepLogradouro = await client.query(
+                    'SELECT idlogradouro FROM cep WHERE idcep = $1',
+                    [cepId]
+                );
+                
+                if (cepLogradouro.rows[0].idlogradouro !== logradouroId) {
+                    console.warn(`Atenção: CEP ${cepFormatado} já existe mas está vinculado a outro logradouro`);
+                    // Neste caso, você pode optar por:
+                    // 1. Criar um novo registro de CEP para este logradouro
+                    // 2. Usar o CEP existente mesmo com logradouro diferente
+                    // 3. Retornar erro
+                    // Vou optar por criar um novo registro de CEP
+                    const novoCEP = await client.query(
+                        'INSERT INTO cep (codigo, idlogradouro) VALUES ($1, $2) RETURNING idcep',
+                        [cepFormatado, logradouroId]
+                    );
+                    cepId = novoCEP.rows[0].idcep;
+                    console.log(`Novo CEP criado para este logradouro: ID ${cepId}`);
+                }
             } else {
                 // Criar novo CEP
                 const novoCEP = await client.query(
-                    'INSERT INTO CEP (codigo, "idLogradouro") VALUES ($1, $2) RETURNING "idCEP"',
+                    'INSERT INTO cep (codigo, idlogradouro) VALUES ($1, $2) RETURNING idcep',
                     [cepFormatado, logradouroId]
                 );
-                cepId = novoCEP.rows[0].idCEP;
+                cepId = novoCEP.rows[0].idcep;
                 console.log(`CEP criado: ${cepFormatado} (ID: ${cepId})`);
             }
         } catch (error) {
+            await client.query('ROLLBACK');
             console.error('Erro ao processar CEP:', error);
             throw error;
         }
 
-        // Verificar se o endereço já existe (combinação de logradouro, número e CEP)
+        // 6. Verificar se o endereço já existe (combinação de logradouro, número e CEP)
         const enderecoExistente = await client.query(
-            'SELECT "idEndereco" FROM Endereco WHERE "idLogradouro" = $1 AND numero = $2 AND "idCEP" = $3',
-            [logradouroId, numero, cepId]
+            'SELECT idendereco FROM endereco WHERE idlogradouro = $1 AND numero = $2 AND idcep = $3',
+            [logradouroId, parseInt(numero), cepId]
         );
+
+        let enderecoId;
+        let enderecoCriado = false;
 
         if (enderecoExistente.rows.length > 0) {
             // Se o endereço já existe, retorna o ID existente
-            const enderecoId = enderecoExistente.rows[0].idEndereco;
+            enderecoId = enderecoExistente.rows[0].idendereco;
             console.log(`Endereço já existe: ID ${enderecoId}`);
-            
-            // Buscar dados completos do endereço existente
-            const enderecoCompleto = await client.query(`
-                SELECT 
-                    e.*, 
-                    c.codigo as cep, 
-                    lo.nome as logradouro, 
-                    b.nome as bairro, 
-                    ci.nome as cidade, 
-                    es.nome as estado, 
-                    es.sigla
-                FROM Endereco e
-                JOIN CEP c ON e."idCEP" = c."idCEP"
-                JOIN Logradouro lo ON e."idLogradouro" = lo."idLogradouro"
-                JOIN Bairro b ON lo."idBairro" = b."idBairro"
-                JOIN Cidade ci ON b."idCidade" = ci."idCidade"
-                JOIN Estado es ON ci."idEstado" = es."idEstado"
-                WHERE e."idEndereco" = $1
-            `, [enderecoId]);
+        } else {
+            // 7. Criar o endereço final
+            console.log('Criando novo endereço...');
+            const novoEndereco = await client.query(
+                'INSERT INTO endereco (idlogradouro, numero, complemento, idcep) VALUES ($1, $2, $3, $4) RETURNING idendereco',
+                [logradouroId, parseInt(numero), complemento || null, cepId]
+            );
 
-            return res.status(200).json({
-                message: 'Endereço já existe no sistema',
-                idendereco: enderecoId,
-                data: enderecoCompleto.rows[0],
-                created: false
-            });
+            enderecoId = novoEndereco.rows[0].idendereco;
+            enderecoCriado = true;
+            console.log(`Endereço criado com ID: ${enderecoId}`);
         }
 
-        // Criar o endereço final
-        console.log('Criando novo endereço...');
-        const novoEndereco = await client.query(
-            'INSERT INTO Endereco ("idLogradouro", numero, complemento, "idCEP") VALUES ($1, $2, $3, $4) RETURNING "idEndereco"',
-            [logradouroId, numero, complemento || null, cepId]
-        );
+        // Commit da transação
+        await client.query('COMMIT');
 
-        const enderecoId = novoEndereco.rows[0].idEndereco;
-        console.log(`Endereço criado com ID: ${enderecoId}`);
-
-        // Buscar os dados completos do endereço criado
+        // 8. Buscar os dados completos do endereço
         const enderecoCompleto = await client.query(`
             SELECT 
-                e.*, 
+                e.idendereco,
+                e.numero,
+                e.complemento,
                 c.codigo as cep, 
                 lo.nome as logradouro, 
                 b.nome as bairro, 
                 ci.nome as cidade, 
                 es.nome as estado, 
-                es.sigla
-            FROM Endereco e
-            JOIN CEP c ON e."idCEP" = c."idCEP"
-            JOIN Logradouro lo ON e."idLogradouro" = lo."idLogradouro"
-            JOIN Bairro b ON lo."idBairro" = b."idBairro"
-            JOIN Cidade ci ON b."idCidade" = ci."idCidade"
-            JOIN Estado es ON ci."idEstado" = es."idEstado"
-            WHERE e."idEndereco" = $1
+                es.sigla,
+                es.idestado,
+                ci.idcidade,
+                b.idbairro,
+                lo.idlogradouro,
+                c.idcep
+            FROM endereco e
+            JOIN cep c ON e.idcep = c.idcep
+            JOIN logradouro lo ON e.idlogradouro = lo.idlogradouro
+            JOIN bairro b ON lo.idbairro = b.idbairro
+            JOIN cidade ci ON b.idcidade = ci.idcidade
+            JOIN estado es ON ci.idestado = es.idestado
+            WHERE e.idendereco = $1
         `, [enderecoId]);
 
-        res.status(201).json({
-            message: 'Endereço criado com sucesso',
+        const responseData = {
+            message: enderecoCriado ? 'Endereço criado com sucesso' : 'Endereço já existe no sistema',
             idendereco: enderecoId,
             data: enderecoCompleto.rows[0],
-            created: true
-        });
+            created: enderecoCriado
+        };
+
+        res.status(enderecoCriado ? 201 : 200).json(responseData);
 
     } catch (error) {
+        // Rollback em caso de erro
+        if (client) {
+            await client.query('ROLLBACK').catch(rollbackError => {
+                console.error('Erro ao fazer rollback:', rollbackError);
+            });
+        }
+        
         console.error('Erro ao criar endereço completo:', error);
         
         // Erros específicos
